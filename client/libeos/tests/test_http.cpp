@@ -45,3 +45,17 @@ TEST(Api, NoAddressIsANetworkError) {
   Api api(Options{});
   EXPECT_THROW(api.ping(), Error);
 }
+
+TEST(Api, TokenIsMd5OfPasswordAndSalt) {
+  // The example in the Subsonic API documentation.
+  EXPECT_EQ(Api::make_token("sesame", "c19b2d"), "26719a1196d2a940705a59634eb18eab");
+  EXPECT_EQ(Api::make_token("", ""), "d41d8cd98f00b204e9800998ecf8427e");
+  // Longer than one MD5 block.
+  EXPECT_EQ(Api::make_token("The quick brown fox jumps over the lazy dog", ""), "9e107d9d372bb6826bd81d3542a419d6");
+  EXPECT_EQ(Api::make_token(std::string(64, 'a'), ""), "014842d480b571495a4a0363793f7367");
+}
+
+TEST(Api, MediaUrlsCarryTheTokenWithoutAKey) {
+  Api api({.base_url = "http://nd:4533", .client_name = "kleulir", .username = "alice", .token = "abc", .salt = "s1"});
+  EXPECT_EQ(api.stream_url("s1"), "http://nd:4533/rest/stream?id=s1&u=alice&t=abc&s=s1&v=1.16.1&c=kleulir");
+}

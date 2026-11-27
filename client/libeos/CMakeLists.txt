@@ -17,6 +17,7 @@ add_library(eos_client STATIC
   src/api_ext.cpp
   src/api_rest.cpp
   src/http.cpp
+  src/md5.cpp
   src/parse.cpp)
 add_library(eos::client ALIAS eos_client)
 set_target_properties(eos_client PROPERTIES OUTPUT_NAME eos POSITION_INDEPENDENT_CODE ON)

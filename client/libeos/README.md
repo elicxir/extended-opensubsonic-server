@@ -23,6 +23,7 @@ Graph g = api.graph({.seed = "song:" + album.songs[0].id});
 Graph more = api.graph({.seed = g.nodes[1].id, .depth = 1});
 ```
 
+- eos ではない OpenSubsonic サーバー（Navidrome など）には `Api::token_login()` で入ります。返ってきた `username`、`token`、`salt` を `Options` に入れると、`/rest` の呼び出しがトークン認証（`u`、`t`、`s`）で通ります。`/ext` はありません。
 - 呼び出しはサーバーの応答を待ちます。UI スレッドではなく作業用のスレッドから呼んでください。
 - 1 つの `Api` を複数のスレッドから同時に使えます。接続は開いたまま使い回します。
 - 失敗は `eos::client::Error` を投げます。`offline()`（つながらない）、`unauthorized()`、`forbidden()`、`not_found()` で場合分けできます。
