@@ -494,3 +494,145 @@ TEST_F(ExtTest, ExportAndImportIntoFreshDatabase) {
   auto again = fresh.call("POST", "/ext/import", exported.body);
   EXPECT_FALSE(again.body["imported"].contains("relations"));
 }
+
+namespace {
+
+const json* find_node(const json& g, const std::string& id) {
+  for (const auto& n : g["nodes"])
+    if (n["id"] == id) return &n;
+  return nullptr;
+}
+
+size_t count_edges(const json& g, const std::string& type) {
+  size_t n = 0;
+  for (const auto& e : g["edges"]) n += e["type"] == type;
+  return n;
+}
+
+}  // namespace
+
+TEST_F(ExtTest, GraphAroundASong) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       t5 = s->track("Box/05.flac");
+  std::string comp = s->get("/ext/songs/" + t1).body["compositionId"];
+
+  // Two steps: the composition and the work, then the other songs they hold.
+  auto r = s->get("/ext/graph?seed=song:" + t1, &s->user_key);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  auto g = r.body;
+  EXPECT_EQ(g["seed"], "song:" + t1);
+  EXPECT_EQ(g["truncated"], false);
+  EXPECT_EQ(g["nodes"].size(), 6u);  // 01, composition, Game X, 02, 03, 05
+  EXPECT_EQ(g["nodes"][0]["id"], "song:" + t1);
+  EXPECT_EQ(g["nodes"][0]["label"], "Main Theme");
+  EXPECT_EQ(g["nodes"][0]["distance"], 0);
+  EXPECT_EQ(g["nodes"][0]["song"]["compositionId"], comp);
+  EXPECT_EQ(count_edges(g, "performance"), 2u);
+  EXPECT_EQ(count_edges(g, "title"), 4u);
+  EXPECT_EQ(g["edges"].size(), 6u);
+  auto* c = find_node(g, "composition:" + comp);
+  ASSERT_NE(c, nullptr);
+  EXPECT_EQ((*c)["type"], "composition");
+  EXPECT_EQ((*c)["label"], "Main Theme");
+  EXPECT_EQ((*c)["degree"], 2);
+  EXPECT_EQ((*c)["expanded"], true);
+  EXPECT_EQ((*c)["composition"]["id"], comp);
+  // The medley is also in Game Y, which is three steps away.
+  auto* medley = find_node(g, "song:" + t5);
+  ASSERT_NE(medley, nullptr);
+  EXPECT_EQ((*medley)["distance"], 2);
+  EXPECT_EQ((*medley)["degree"], 2);
+  EXPECT_EQ((*medley)["expanded"], false);
+  for (const auto& e : g["edges"]) {
+    if (e["type"] != "performance" || e["from"] != "song:" + t2) continue;
+    EXPECT_EQ(e["to"], "composition:" + comp);
+    EXPECT_EQ(e["arrangementName"], "Piano Ver.");
+    EXPECT_EQ(e["arrangementKind"], "piano");
+    EXPECT_EQ(e["isOriginal"], false);
+    EXPECT_EQ(e["provenance"], "tag");
+  }
+
+  // One step only: the hubs are shown but not opened.
+  auto g1 = s->get("/ext/graph?seed=track:" + t1 + "&depth=1").body;
+  EXPECT_EQ(g1["nodes"].size(), 3u);
+  EXPECT_EQ(g1["edges"].size(), 2u);
+  EXPECT_EQ((*find_node(g1, "composition:" + comp))["expanded"], false);
+
+  // A relation joins a song to the composition, with a direction.
+  auto rel = s->call("POST", "/ext/relations",
+                     json{{"from", {{"type", "track"}, {"id", t4}}},
+                          {"to", {{"type", "composition"}, {"id", comp}}},
+                          {"type", "quote"}});
+  ASSERT_EQ(rel.status, 201);
+  g = s->get("/ext/graph?seed=song:" + t1).body;
+  EXPECT_EQ(g["nodes"].size(), 7u);
+  ASSERT_EQ(count_edges(g, "quote"), 1u);
+  for (const auto& e : g["edges"]) {
+    if (e["type"] != "quote") continue;
+    EXPECT_EQ(e["from"], "song:" + t4);
+    EXPECT_EQ(e["to"], "composition:" + comp);
+    EXPECT_EQ(e["directed"], true);
+    EXPECT_EQ(e["relationId"], rel.body["id"]);
+    EXPECT_EQ(e["provenance"], "manual");
+  }
+  EXPECT_EQ(count_edges(s->get("/ext/graph?seed=song:" + t1 + "&include=composition,title").body, "quote"), 0u);
+
+  // The node budget keeps the nearest nodes.
+  auto small = s->get("/ext/graph?seed=song:" + t1 + "&limit=3").body;
+  EXPECT_EQ(small["nodes"].size(), 3u);
+  EXPECT_EQ(small["truncated"], true);
+
+  // Any node can be the centre.
+  auto from_comp = s->get("/ext/graph?seed=composition:" + comp + "&depth=1").body;
+  EXPECT_EQ(from_comp["nodes"].size(), 4u);  // composition, 01, 02, 04
+  EXPECT_EQ(from_comp["edges"].size(), 3u);
+
+  EXPECT_EQ(s->get("/ext/graph").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:nope").status, 404);
+  EXPECT_EQ(s->get("/ext/graph?seed=folder:1").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + t1 + "&include=bogus").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + t1 + "&depth=two").status, 400);
+}
+
+TEST_F(ExtTest, GraphPeopleAndAlbumsOnRequest) {
+  auto kato = s->conn->scalar_text("SELECT id FROM artist WHERE name = 'Kato'").value_or("");
+  ASSERT_FALSE(kato.empty());
+  auto o1 = s->track("Other/01.flac");
+
+  // People are not followed unless asked for.
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + o1).body["nodes"].size(), 1u);
+
+  // Kato composed Battle and both Field tracks, and performs the Field tracks.
+  auto g = s->get("/ext/graph?seed=artist:" + kato + "&include=artist&depth=1").body;
+  EXPECT_EQ(g["nodes"].size(), 4u);
+  EXPECT_EQ(g["nodes"][0]["label"], "Kato");
+  EXPECT_EQ(count_edges(g, "credit"), 5u);
+  g = s->get("/ext/graph?seed=artist:" + kato + "&include=artist&depth=1&roles=composer").body;
+  EXPECT_EQ(g["edges"].size(), 3u);
+  for (const auto& e : g["edges"]) {
+    EXPECT_EQ(e["role"], "composer");
+    EXPECT_EQ(e["to"], "artist:" + kato);
+  }
+
+  // From a song, a person leads to their other songs...
+  g = s->get("/ext/graph?seed=song:" + o1 + "&include=artist").body;
+  EXPECT_EQ(g["nodes"].size(), 4u);  // Field, Kato, Battle, Field (Arrange)
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["expanded"], true);
+  // ...unless they have too many: then the node is shown with its size and left closed.
+  g = s->get("/ext/graph?seed=song:" + o1 + "&include=artist&fanout=2").body;
+  EXPECT_EQ(g["nodes"].size(), 2u);
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["degree"], 3);
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["expanded"], false);
+  EXPECT_EQ(g["truncated"], false);
+
+  // Albums: the physical album and the virtual albums of a song.
+  auto box = s->album("Collection Box");
+  g = s->get("/ext/graph?seed=album:" + box + "&include=album&depth=1").body;
+  EXPECT_EQ(g["nodes"].size(), 6u);
+  EXPECT_EQ(g["nodes"][0]["album"]["kind"], "physical");
+  EXPECT_EQ(g["edges"].size(), 5u);
+  auto* first = find_node(g, "song:" + s->track("Box/01.flac"));
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ((*first)["degree"], 2);  // also in the virtual album "Game X Soundtrack"
+  EXPECT_EQ((*first)["expanded"], false);
+}
