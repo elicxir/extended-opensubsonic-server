@@ -869,3 +869,89 @@ TEST_F(ExtTest, GraphSimilarFromTheSeedOnly) {
   EXPECT_EQ(s->get(seed + "&similarMinScore=high").status, 400);
   EXPECT_EQ(s->get(seed + "&similarK=x").status, 400);
 }
+
+namespace {
+
+// Field / Field (Arrange) by Kato: the rules propose them as one composition by title.
+// mb_link() sends what mb-match would: the same songs under a MusicBrainz work.
+struct Approvals {
+  Server& s;
+  std::string f1 = s.track("Other/01.flac"), f2 = s.track("Other/02.flac");
+
+  std::string title_match() {
+    auto items = s.get("/ext/suggestions?rule=same_composition").body["items"];
+    EXPECT_EQ(items.size(), 1u);
+    return items.empty() ? "" : items[0]["id"].get<std::string>();
+  }
+  std::string mb_link() {
+    json body = {{"suggestions",
+                  json::array({{{"rule", "mb_match"},
+                                {"score", 0.8},
+                                {"proposal",
+                                 {{"action", "link_arrangement"},
+                                  {"composition", {{"name", "Field Theme"}, {"musicBrainzWorkId", "mbid-field"},
+                                                   {"composers", {"Kato"}}}},
+                                  {"tracks", {f1, f2}}}}}})}};
+    auto r = s.call("POST", "/ext/suggestions", body);
+    EXPECT_EQ(r.status, 201) << r.body.dump();
+    return r.body["created"][0];
+  }
+  int accept(const std::string& id) { return s.call("POST", "/ext/suggestions/" + id + "/accept").status; }
+  std::string composition_of(const std::string& track) {
+    auto v = s.get("/ext/songs/" + track).body["compositionId"];
+    return v.is_string() ? v.get<std::string>() : "";
+  }
+  int64_t count(const std::string& sql) { return s.conn->scalar_int(sql).value_or(0); }
+};
+
+}  // namespace
+
+TEST_F(ExtTest, TitleMatchDoesNotUndoMusicBrainz) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(mb), 200);
+  auto work = a.composition_of(a.f1);
+  ASSERT_FALSE(work.empty());
+  // Accepting the older title match afterwards must not pull the songs out again.
+  ASSERT_EQ(a.accept(title), 200);
+  EXPECT_EQ(a.composition_of(a.f1), work);
+  EXPECT_EQ(a.composition_of(a.f2), work);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition WHERE name_norm = 'field'"), 0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition"),
+            a.count("SELECT COUNT(DISTINCT a.composition_id) FROM track_arrangement ta "
+                    "JOIN arrangement a ON a.id = ta.arrangement_id"));
+}
+
+TEST_F(ExtTest, MovedSongsLeaveNoEmptyComposition) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(title), 200);
+  auto by_title = a.composition_of(a.f1);
+  ASSERT_FALSE(by_title.empty());
+  // MusicBrainz moves both songs on: the title-made composition is left empty and goes.
+  ASSERT_EQ(a.accept(mb), 200);
+  auto work = a.composition_of(a.f1);
+  EXPECT_NE(work, by_title);
+  EXPECT_EQ(a.composition_of(a.f2), work);
+  EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 404);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM arrangement WHERE composition_id = '" + by_title + "'"), 0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM participant WHERE entity_type = 'composition' AND entity_id = '" +
+                    by_title + "'"),
+            0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition WHERE source = 1 AND NOT EXISTS ("
+                    "  SELECT 1 FROM arrangement ar JOIN track_arrangement ta ON ta.arrangement_id = ar.id "
+                    "  WHERE ar.composition_id = composition.id)"),
+            0);
+}
+
+TEST_F(ExtTest, EmptiedCompositionStaysWhenSomethingPointsAtIt) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(title), 200);
+  auto by_title = a.composition_of(a.f1);
+  // Someone picked a favourite version of it: keep the composition (now empty).
+  ASSERT_EQ(s->call("PUT", "/ext/compositions/" + by_title + "/preferred", json{{"songId", a.f1}}, &s->user_key).status,
+            200);
+  ASSERT_EQ(a.accept(mb), 200);
+  EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 200);
+}
