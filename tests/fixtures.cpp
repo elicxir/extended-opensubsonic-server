@@ -1,6 +1,8 @@
 #include "fixtures.h"
 
+#include <stb/stb_image_write.h>
 #include <taglib/flacfile.h>
+#include <taglib/flacpicture.h>
 #include <taglib/tpropertymap.h>
 
 #include <cmath>
@@ -78,6 +80,29 @@ void make_flac(const fs::path& path, int freq_hz, const Tags& tags) {
   if (std::system(cmd.c_str()) != 0) throw std::runtime_error("flac encoder failed");
   fs::remove(wav);
   retag_flac(path, tags);
+}
+
+void add_flac_picture(const fs::path& path, const std::string& data, const std::string& mime) {
+  TagLib::FLAC::File f(path.c_str());
+  if (!f.isValid()) throw std::runtime_error("cannot open " + path.string());
+  auto* pic = new TagLib::FLAC::Picture();
+  pic->setType(TagLib::FLAC::Picture::FrontCover);
+  pic->setMimeType(mime);
+  pic->setData(TagLib::ByteVector(data.data(), static_cast<unsigned int>(data.size())));
+  f.addPicture(pic);
+  if (!f.save()) throw std::runtime_error("cannot save " + path.string());
+}
+
+std::string make_png(int w, int h) {
+  std::vector<unsigned char> px(static_cast<size_t>(w) * h * 3, 0);
+  for (size_t i = 0; i < px.size(); i += 3) px[i] = 200;
+  std::string out;
+  stbi_write_png_to_func(
+      [](void* ctx, void* data, int n) {
+        static_cast<std::string*>(ctx)->append(static_cast<const char*>(data), static_cast<size_t>(n));
+      },
+      &out, w, h, 3, px.data(), w * 3);
+  return out;
 }
 
 }  // namespace eos::test

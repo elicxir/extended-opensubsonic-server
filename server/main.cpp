@@ -1,8 +1,8 @@
 // eosd: the eos music server.
 //
-// M1 scope: loads the config, prepares the data directory and database, and keeps the
-// library index up to date (scan at start-up, then every scanner.interval). The HTTP
-// API arrives in M2.
+// Loads the config, prepares the data directory and database, keeps the library index
+// up to date (scan at start-up, then every scanner.interval) and serves the
+// OpenSubsonic API on server.listen.
 
 #include <signal.h>
 
@@ -16,7 +16,9 @@
 #include "core/config.h"
 #include "core/crypto.h"
 #include "core/log.h"
+#include "api/subsonic/router.h"
 #include "db/migrate.h"
+#include "http/server.h"
 #include "db/write_queue.h"
 #include "scanner/scanner.h"
 
@@ -81,9 +83,33 @@ int main(int argc, char** argv) {
       return stats.errors.empty() ? 0 : 1;
     }
 
+    auto secret = crypto::load_or_create_secret_key(cfg.secret_key_path());
+    db::ReadPool reads(cfg.db_path(), 4);
+    api::Services services(cfg, reads, writer, scanner, secret);
+    api::Router router(services);
+
     std::mutex mutex;
     std::condition_variable cv;
     bool stop = false;
+
+    // Periodic scans run beside the HTTP server.
+    std::thread scan_thread([&] {
+      while (true) {
+        try {
+          scanner.scan(false);
+        } catch (const std::exception& e) {
+          log::error("scan failed: {}", e.what());
+        }
+        std::unique_lock lock(mutex);
+        if (cfg.scan_interval_seconds <= 0) {
+          cv.wait(lock, [&] { return stop; });
+        } else {
+          cv.wait_for(lock, std::chrono::seconds(cfg.scan_interval_seconds), [&] { return stop; });
+        }
+        if (stop) return;
+      }
+    });
+
     std::thread signal_thread([&] {
       int sig = 0;
       sigwait(&signals, &sig);
@@ -93,20 +119,14 @@ int main(int argc, char** argv) {
         stop = true;
       }
       cv.notify_all();
+      http::stop();
     });
 
-    log::info("HTTP API is not part of M1 yet; running the scanner only");
-    while (true) {
-      scanner.scan(false);
-      std::unique_lock lock(mutex);
-      if (cfg.scan_interval_seconds <= 0) {
-        cv.wait(lock, [&] { return stop; });
-      } else {
-        cv.wait_for(lock, std::chrono::seconds(cfg.scan_interval_seconds), [&] { return stop; });
-      }
-      if (stop) break;
-    }
+    auto scratch = cfg.cache_dir() / "http";
+    std::filesystem::create_directories(scratch);
+    http::run(router, cfg.listen, cfg.http_threads, scratch.string());  // blocks until http::stop()
     signal_thread.join();
+    scan_thread.join();
     writer.stop();
     log::info("stopped");
     return 0;

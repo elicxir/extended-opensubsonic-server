@@ -33,6 +33,10 @@ struct Config {
   std::filesystem::path secret_key;  // empty -> <data_dir>/secret.key
   std::string log_level = "info";
 
+  // [http]
+  int http_threads = 0;  // 0 = number of CPUs
+  std::vector<std::string> trusted_proxies = {"127.0.0.1", "::1"};
+
   std::vector<LibraryConfig> libraries;
 
   // [scanner]
@@ -56,7 +60,15 @@ struct Config {
                                                 "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
                                                 "fe80::/10"};
 
+  // [artwork]
+  std::vector<std::string> artwork_album_files = {"cover.*", "folder.*", "front.*"};
+  int artwork_cache_max_mb = 500;
+
+  // [subsonic]
+  std::string ignored_articles = "The El La Los Las Le Les";
+
   std::filesystem::path db_path() const { return data_dir / "eos.db"; }
+  std::filesystem::path cache_dir() const { return data_dir / "cache"; }
   std::filesystem::path secret_key_path() const {
     return secret_key.empty() ? data_dir / "secret.key" : secret_key;
   }

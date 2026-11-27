@@ -29,4 +29,11 @@ void make_flac(const std::filesystem::path& path, int freq_hz, const Tags& tags)
 // Replaces the Vorbis comments of an existing FLAC file (the audio stays the same).
 void retag_flac(const std::filesystem::path& path, const Tags& tags);
 
+// Embeds a picture (front cover) into an existing FLAC file.
+void add_flac_picture(const std::filesystem::path& path, const std::string& data,
+                      const std::string& mime);
+
+// A small solid-colour PNG (w x h), for cover-art tests.
+std::string make_png(int w, int h);
+
 }  // namespace eos::test

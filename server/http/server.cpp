@@ -1,0 +1,85 @@
+#include "http/server.h"
+
+#include <drogon/drogon.h>
+
+#include <stdexcept>
+#include <thread>
+
+#include "core/log.h"
+#include "core/strings.h"
+
+namespace eos::http {
+namespace {
+
+std::pair<std::string, uint16_t> split_listen(const std::string& listen) {
+  auto colon = listen.rfind(':');
+  if (colon == std::string::npos) throw std::invalid_argument("listen must be host:port");
+  auto host = listen.substr(0, colon);
+  if (host.size() > 2 && host.front() == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
+  auto port = std::stoi(listen.substr(colon + 1));
+  if (port <= 0 || port > 65535) throw std::invalid_argument("invalid port in listen");
+  return {host, static_cast<uint16_t>(port)};
+}
+
+api::Request to_request(const drogon::HttpRequestPtr& req) {
+  api::Request r;
+  r.method = req->methodString();
+  r.path = std::string(req->path());
+  api::parse_query(req->query(), r.params);
+  auto ctype = to_lower_ascii(req->getHeader("content-type"));
+  if (req->method() == drogon::Post && ctype.starts_with("application/x-www-form-urlencoded"))
+    api::parse_query(req->body(), r.params);  // formPost extension
+  for (const auto& [k, v] : req->getHeaders()) r.headers[to_lower_ascii(k)] = v;
+  r.peer_ip = req->peerAddr().toIp();
+  return r;
+}
+
+drogon::HttpResponsePtr to_drogon(const api::Response& r) {
+  drogon::HttpResponsePtr resp;
+  if (r.file) {
+    bool partial = r.status == 206;
+    resp = drogon::HttpResponse::newFileResponse(r.file->string(), static_cast<size_t>(r.offset),
+                                                 static_cast<size_t>(r.length), partial, "",
+                                                 drogon::CT_CUSTOM, r.content_type);
+  } else {
+    resp = drogon::HttpResponse::newHttpResponse();
+    resp->setBody(r.body);
+    resp->setContentTypeString(r.content_type);
+  }
+  resp->setStatusCode(static_cast<drogon::HttpStatusCode>(r.status));
+  for (const auto& [k, v] : r.headers) {
+    if (r.file && iequals_ascii(k, "Content-Range")) continue;  // Drogon sets it for file ranges
+    resp->addHeader(k, v);
+  }
+  return resp;
+}
+
+}  // namespace
+
+void run(api::Router& router, const std::string& listen, int threads, const std::string& scratch_dir) {
+  auto [host, port] = split_listen(listen);
+  if (threads <= 0) threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+  auto& app = drogon::app();
+  app.setLogLevel(trantor::Logger::kWarn)
+      .disableSigtermHandling()
+      .enableServerHeader(false)
+      .setThreadNum(static_cast<size_t>(threads))
+      .setClientMaxBodySize(8 * 1024 * 1024)
+      .setUploadPath(scratch_dir)
+      .addListener(host, port);
+  app.registerHandlerViaRegex(
+      "/rest/.*",
+      [&router](const drogon::HttpRequestPtr& req, std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+        auto request = to_request(req);
+        auto response = router.handle(request);
+        log::debug("{} {} -> {}", request.method, request.path, response.status);
+        cb(to_drogon(response));
+      },
+      {drogon::Get, drogon::Post, drogon::Head});
+  log::info("listening on {}:{} ({} threads)", host, port, threads);
+  app.run();
+}
+
+void stop() { drogon::app().quit(); }
+
+}  // namespace eos::http

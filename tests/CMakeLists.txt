@@ -11,6 +11,8 @@ add_executable(eos_tests
   test_db.cpp
   test_users.cpp
   test_scanner.cpp
+  test_api_units.cpp
+  test_api.cpp
   fixtures.cpp)
 target_link_libraries(eos_tests PRIVATE eoslib GTest::gtest_main)
 target_include_directories(eos_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

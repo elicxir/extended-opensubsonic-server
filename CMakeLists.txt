@@ -19,6 +19,15 @@ find_package(TagLib 2 CONFIG REQUIRED)
 find_package(nlohmann_json 3 REQUIRED)
 find_package(tomlplusplus 3 REQUIRED)
 find_package(Threads REQUIRED)
+# Drogon: link the shared libraries directly. Its CMake package config insists on the
+# development files of every optional backend (PostgreSQL, MySQL, Redis, ...).
+find_path(DROGON_INCLUDE_DIR drogon/drogon.h REQUIRED)
+find_library(DROGON_LIBRARY drogon REQUIRED)
+find_library(TRANTOR_LIBRARY trantor REQUIRED)
+pkg_check_modules(JSONCPP REQUIRED IMPORTED_TARGET jsoncpp)
+add_library(eos_drogon INTERFACE)
+target_include_directories(eos_drogon INTERFACE ${DROGON_INCLUDE_DIR})
+target_link_libraries(eos_drogon INTERFACE ${DROGON_LIBRARY} ${TRANTOR_LIBRARY} PkgConfig::JSONCPP)
 
 # Embed server/db/migrations/*.sql into the binary.
 file(GLOB EOS_MIGRATION_FILES CONFIGURE_DEPENDS
@@ -51,6 +60,24 @@ add_library(eoslib STATIC
   server/scanner/track_info.cpp
   server/scanner/scanner.cpp
   server/scanner/tag_report.cpp
+  server/media/artwork.cpp
+  server/api/http.cpp
+  server/api/net.cpp
+  server/api/node.cpp
+  server/api/rate_limit.cpp
+  server/api/subsonic/auth.cpp
+  server/api/subsonic/builders.cpp
+  server/api/subsonic/context.cpp
+  server/api/subsonic/router.cpp
+  server/api/subsonic/h_system.cpp
+  server/api/subsonic/h_browse.cpp
+  server/api/subsonic/h_lists.cpp
+  server/api/subsonic/h_search.cpp
+  server/api/subsonic/h_annotate.cpp
+  server/api/subsonic/h_playlists.cpp
+  server/api/subsonic/h_queue.cpp
+  server/api/subsonic/h_media.cpp
+  server/http/server.cpp
   ${EOS_MIGRATIONS_CPP})
 target_include_directories(eoslib PUBLIC ${CMAKE_SOURCE_DIR}/server)
 target_compile_definitions(eoslib PUBLIC EOS_VERSION="${PROJECT_VERSION}")
@@ -58,7 +85,7 @@ target_link_libraries(eoslib PUBLIC
   PkgConfig::SQLITE3 PkgConfig::UTF8PROC
   OpenSSL::Crypto TagLib::tag
   nlohmann_json::nlohmann_json tomlplusplus::tomlplusplus
-  Threads::Threads)
+  eos_drogon Threads::Threads)
 target_compile_options(eoslib PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(eosd server/main.cpp)

@@ -3,10 +3,22 @@
 #include <chrono>
 #include <format>
 
+#include "core/normalize.h"
+
 namespace eos::db {
 namespace {
 [[noreturn]] void fail(sqlite3* db, int rc, std::string_view what) {
   throw DbError(rc, std::format("{}: {}", what, db ? sqlite3_errmsg(db) : sqlite3_errstr(rc)));
+}
+void eos_norm(sqlite3_context* ctx, int, sqlite3_value** argv) {
+  if (sqlite3_value_type(argv[0]) == SQLITE_NULL) {
+    sqlite3_result_null(ctx);
+    return;
+  }
+  auto p = reinterpret_cast<const char*>(sqlite3_value_text(argv[0]));
+  auto n = static_cast<size_t>(sqlite3_value_bytes(argv[0]));
+  auto out = normalize(std::string_view(p ? p : "", n));
+  sqlite3_result_text64(ctx, out.data(), out.size(), SQLITE_TRANSIENT, SQLITE_UTF8);
 }
 }  // namespace
 
@@ -105,6 +117,9 @@ Connection::Connection(const std::filesystem::path& path, Mode mode) {
     throw DbError(rc, std::format("open {}: {}", path.string(), msg));
   }
   sqlite3_busy_timeout(db_, 5000);
+  // eos_norm(text): the same normalisation as eos::normalize, for LIKE searches.
+  sqlite3_create_function_v2(db_, "eos_norm", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr,
+                             &eos_norm, nullptr, nullptr, nullptr);
   exec("PRAGMA foreign_keys = ON");
   if (mode == Mode::read_write) {
     exec("PRAGMA journal_mode = WAL");
