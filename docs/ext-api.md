@@ -228,10 +228,11 @@
 
 | `action` | 項目 | 承認すると |
 | --- | --- | --- |
-| `link_composition` | `name`、`composers`、`tracks`、`compositionId?` | 楽曲（なければ作る）の原曲に曲を紐付け |
+| `link_composition` | `name`、`composers`、`tracks`、`compositionId?` | 楽曲（なければ作る）の原曲に曲を紐付け。編曲者（`ARRANGER` タグか手作業）がある曲は、原曲ではなくその編曲者の編曲（名前なし。なければ作る）に入れます |
 | `merge_arrangements` | `arrangementId`、`tracks` | 曲をその編曲に紐付け |
 | `relation` | `type`、`subtype?`、`from`、`to`、`position?`、`note?` | 関係を作る |
 | `medley` | `from`、`parts`（`[{"position", "to"}]`） | メドレーの関係を部分ごとに作る |
+| `link_arrangement` | `composition`（`{"id"}` または `{"name", "composers?", "musicBrainzWorkId?"}`）、`arrangement`（`{"name", "kind?", "arrangers?"}`、省略で原曲）、`tracks`、`originalTracks?` | 楽曲（ID、MusicBrainz の Work ID、名前の順に探し、なければ作る）の、その名前の編曲（なければ作る）に曲を紐付け。`arrangement` を省略したときは `link_composition` と同じく、編曲者がある曲はその編曲者の編曲に入れます。`originalTracks`（任意）に挙げた曲は、同じ楽曲の原曲に入れます（「A は B の編曲」を 1 つの候補で表すため） |
 | `link_title` | `tracks`、`titleId?` または `titleName` | 作品（なければ作る）に曲を入れる |
 | `virtual_album` | `name`、`tracks`（順番どおり） | 仮想アルバム（なければ作る）に曲を入れる |
 

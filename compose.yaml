@@ -4,6 +4,10 @@
 #   docker compose exec eos eos-admin user add alice --admin
 #   docker compose exec eos eos-admin tag-report
 #
+# Helper tools (not started by "up"; see docs/tools.md):
+#   EOS_API_KEY=eos_... docker compose run --rm tools audio-match --album "Piano"
+#   EOS_API_KEY=eos_... docker compose run --rm tools mb-match --dry-run
+#
 # Folders on the host:
 #   EOS_MUSIC_DIR  your music, mounted read-only at /music (default ./music)
 #   EOS_DATA_DIR   database, secret key and caches, mounted at /data (default ./data)
@@ -27,3 +31,17 @@ services:
       # - "./eos.toml:/etc/eos/eos.toml:ro"
     environment:
       TZ: "${TZ:-Asia/Tokyo}"
+
+  tools:
+    build:
+      context: .
+      dockerfile: docker/tools.Dockerfile
+    image: eos-tools:latest
+    profiles: ["tools"]
+    user: "${EOS_UID:-1000}:${EOS_GID:-1000}"
+    volumes:
+      - "${EOS_MUSIC_DIR:-./music}:/music:ro"
+      - "${EOS_DATA_DIR:-./data}:/data"
+    environment:
+      EOS_SERVER: "http://eos:4540"
+      EOS_API_KEY: "${EOS_API_KEY:-}"

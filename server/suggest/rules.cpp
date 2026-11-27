@@ -97,7 +97,7 @@ std::optional<std::string> derivative_subtype(const std::string& title, const Co
       return "tv_size";
     if (n.find("offvocal") != std::string::npos || n.find("karaoke") != std::string::npos) return "off_vocal";
     if (n.find("instrumental") != std::string::npos) return "instrumental";
-    if (n.find("remix") != std::string::npos) return "remix";
+    if (n.find("remix") != std::string::npos || n.find("rmx") != std::string::npos) return "remix";
     return "other";
   }
   return std::nullopt;

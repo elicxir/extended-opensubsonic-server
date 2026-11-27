@@ -96,11 +96,13 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 | CLAP のモデルと 73 曲分のベクトル | `data/graph-sample/cache/embed/` | 運ばない。移行先で作り直す |
 | 実ライブラリの DB | `~/extended-opensubsonic-server/data/eos.db` | 本体の移行に含める |
 | 音楽ファイル | `~/navidrome/music` | 本体の移行に含める |
-| **メインのチェックアウトの未コミットの変更** | `~/extended-opensubsonic-server`（ブランチ `m5-sync`） | **要注意。下記** |
+| メインのチェックアウトの未コミットの変更 | `~/extended-opensubsonic-server`（ブランチ `m5-sync`） | 済み（2026-11-28）。ブランチ `claude/tools-link-arrangement` に push した。下記 |
 
 ### メインのチェックアウトの未コミットの変更
 
-`m5-sync` に、コミットしていない変更がある（このブランチには入っていない）。
+2026-11-28：この変更を、最新の `main` の上に載せてブランチ `claude/tools-link-arrangement` に push した（全 115 件のテストが通る）。`main` へのマージはまだ。ノート PC のメインのチェックアウトの作業ツリーは、そのまま残してある（中身は同じ）。
+
+`m5-sync` に、コミットしていない変更があった（`m5-sync` 自体は `main` にマージ済み）。
 
 - 候補の種類 `link_arrangement`（`server/api/ext/suggestions.cpp` など）
 - `tools/audio-match/`、`tools/mb-match/`、`docker/tools.Dockerfile`、`docs/tools.md`
@@ -109,7 +111,7 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 
 ## 移行先でやること
 
-1. `m5-sync` の未コミットの変更をコミットして push する（ノート PC 側で）。
+1. ~~`m5-sync` の未コミットの変更をコミットして push する（ノート PC 側で）。~~ 済み。`claude/tools-link-arrangement` を `main` にマージする。
 2. このブランチを取得してビルドとテストをする。
 
    ```bash
@@ -118,7 +120,7 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 
 3. サンプル DB を置く。コピーするか、次の手順で作り直す。
    1. 実 DB を SQLite の backup API でコピーする（WAL なので `cp` は使わない）。
-   2. `m5-sync` のビルドの `eosd` を、下の設定でコピーに対して動かす。
+   2. `claude/tools-link-arrangement`（マージ後は `main`）のビルドの `eosd` を、下の設定でコピーに対して動かす。
    3. `eos-admin user add <名前> --admin` で管理者を作り、`/ext/auth/login` で API キーを取る。
    4. `GET /ext/suggestions?status=pending` の ID を全部 `POST /ext/suggestions/batch` の `accept` に入れる。
 
@@ -190,5 +192,5 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 - **「血の涙」が 2 つに割れる。** MusicBrainz に紐付いた 15 曲の楽曲が空になり、「Bloody Tears」（11 曲）と別の「血の涙」（4 曲）に分かれる。曲名による `same_composition` が、MusicBrainz 由来の紐付けを上書きしている。
 - **同名のジングルがまとまる。** 「Game Over」13 曲、「Stage Clear」8 曲など。曲名が同じだけの別の曲と思われる（聴いての確認はしていない）。
   → 対処（2026-11-28）：全部の曲が 30 秒以下の `same_composition` は、確信度 0.4 と理由（`evidence`）付きで出す。規則の候補はもともと自動では適用されないので、一覧の下に回して聴いて確かめる形にした。分けるかどうかは決めていない（音で決めるには `audio-match` が要る）。
-- 空の楽曲と「血の涙」の割れは、`link_arrangement` と MusicBrainz の紐付け（ノート PC の未コミットの変更）が絡むので、デスクトップでは再現できない。そのコードが `main` に入ってから直す。
+- 空の楽曲と「血の涙」の割れは、`link_arrangement` と MusicBrainz の紐付け（ブランチ `claude/tools-link-arrangement`）が絡む。そのコードが `main` に入ってから直す。
 - **関係がほとんどない。** 全体で 1 件。グラフは「曲 → 楽曲」「曲 → 作品」の辺ばかりになる。

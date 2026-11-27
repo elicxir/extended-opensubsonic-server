@@ -10,6 +10,7 @@ eos は OpenSubsonic 互換の音楽サーバーです。サントラ系のコ�
 | [similarity.md](similarity.md) | 曲どうしの類似度の保存（設計と、決めていないこと） |
 | [sync.md](sync.md) | `/ext/session`（WebSocket）による共有リモコン、再生回数と音量と ReplayGain の扱い |
 | [configuration.md](configuration.md) | 設定ファイルと環境変数 |
+| [tools.md](tools.md) | 補助ツール（`audio-match`：音を比べて編曲の原曲を探す、`mb-match`：MusicBrainz から楽曲と編曲） |
 
 ## 全体の約束
 

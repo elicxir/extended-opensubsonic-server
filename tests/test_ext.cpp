@@ -296,6 +296,94 @@ TEST_F(ExtTest, LlmEstimatesWithAutoApply) {
   EXPECT_EQ(s->call("POST", "/ext/suggestions", body).body["skipped"], 2);
 }
 
+TEST_F(ExtTest, LinkArrangementProposal) {
+  // What a MusicBrainz import proposes: "Field (Arrange)" is an arrangement of "Field".
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  json body = {{"suggestions",
+                {{{"rule", "musicbrainz"}, {"score", 0.95},
+                  {"proposal", {{"action", "link_arrangement"},
+                                {"composition", {{"name", "Field"}, {"composers", {"Kato"}},
+                                                 {"musicBrainzWorkId", "00000000-0000-4000-8000-000000000001"}}},
+                                {"tracks", {f1}}}}},
+                 {{"rule", "musicbrainz"}, {"score", 0.95},
+                  {"proposal", {{"action", "link_arrangement"},
+                                {"composition", {{"name", "Field"}, {"musicBrainzWorkId", "00000000-0000-4000-8000-000000000001"}}},
+                                {"arrangement", {{"name", "Field (Arrange)"}, {"arrangers", {"Ito"}}}},
+                                {"tracks", {f2}}}}}}}};
+  auto r = s->call("POST", "/ext/suggestions", body);
+  ASSERT_EQ(r.status, 201);
+  ASSERT_EQ(r.body["created"].size(), 2u);
+  EXPECT_TRUE(r.body["errors"].empty());
+  auto list = s->get("/ext/suggestions?method=llm").body;
+  for (const auto& sug : list["items"])
+    ASSERT_EQ(s->call("POST", "/ext/suggestions/" + sug["id"].get<std::string>() + "/accept").status, 200);
+  auto v = s->get("/ext/songs/" + f1 + "/versions").body;
+  EXPECT_EQ(v["composition"]["name"], "Field");
+  EXPECT_EQ(v["composition"]["musicBrainzWorkId"], "00000000-0000-4000-8000-000000000001");
+  EXPECT_EQ(v["song"]["arrangementProvenance"], "llm");
+  ASSERT_EQ(v["arrangements"].size(), 1u);
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["name"], "Field (Arrange)");
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["arrangers"][0]["name"], "Ito");
+  EXPECT_EQ(v["arrangements"][0]["songs"][0]["id"], f2);
+}
+
+TEST_F(ExtTest, LinkArrangementWithOriginalTracks) {
+  // One suggestion says "Field (Arrange) arranges Field": both land in the same composition.
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  json body = {{"suggestions",
+                {{{"rule", "audio_match"}, {"score", 0.9},
+                  {"proposal", {{"action", "link_arrangement"},
+                                {"composition", {{"name", "Field"}, {"composers", {"Kato"}}}},
+                                {"arrangement", {{"name", "Piano Album"}}},
+                                {"tracks", {f2}},
+                                {"originalTracks", {f1}}}}}}}};
+  auto created = s->call("POST", "/ext/suggestions", body);
+  ASSERT_EQ(created.status, 201);
+  ASSERT_EQ(created.body["created"].size(), 1u) << created.body.dump();
+  auto id = created.body["created"][0].get<std::string>();
+  auto sug = s->get("/ext/suggestions/" + id).body;
+  EXPECT_EQ(sug["targets"].size(), 2u);
+  EXPECT_NE(sug["summary"].get<std::string>().find("1曲を原曲に"), std::string::npos) << sug["summary"];
+  ASSERT_EQ(s->call("POST", "/ext/suggestions/" + id + "/accept").status, 200);
+  auto v = s->get("/ext/songs/" + f1 + "/versions").body;
+  EXPECT_EQ(v["composition"]["name"], "Field");
+  ASSERT_EQ(v["arrangements"].size(), 1u);
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["name"], "Piano Album");
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["kind"], "piano");
+  EXPECT_EQ(v["arrangements"][0]["songs"][0]["id"], f2);
+}
+
+TEST_F(ExtTest, LinkedTracksWithArrangerGoToTheirArrangement) {
+  // COMPOSER is the original composer and ARRANGER the arranger, but there is no WORK tag:
+  // a proposal that names no arrangement puts such tracks in the arrangers' arrangement.
+  test::make_flac(music / "Other/03.flac", 520,
+                  {{"TITLE", {"Field (Arcade)"}}, {"ALBUM", {"Other"}}, {"ARTIST", {"Ito"}}, {"COMPOSER", {"Kato"}},
+                   {"ARRANGER", {"Ito"}}, {"TRACKNUMBER", {"3"}}});
+  test::make_flac(music / "Other/04.flac", 530,
+                  {{"TITLE", {"Field (Live)"}}, {"ALBUM", {"Other"}}, {"ARTIST", {"Ito"}}, {"COMPOSER", {"Kato"}},
+                   {"ARRANGER", {"Ito"}}, {"TRACKNUMBER", {"4"}}});
+  s->scanner->scan(true);
+  auto f1 = s->track("Other/01.flac"), f3 = s->track("Other/03.flac"), f4 = s->track("Other/04.flac");
+  json body = {{"suggestions",
+                {{{"rule", "musicbrainz_alias"}, {"score", 0.85},
+                  {"proposal", {{"action", "link_arrangement"},
+                                {"composition", {{"name", "Field"}, {"composers", {"Kato"}}}},
+                                {"tracks", {f1, f3, f4}}}}}}}};
+  auto created = s->call("POST", "/ext/suggestions", body);
+  ASSERT_EQ(created.status, 201);
+  ASSERT_EQ(created.body["created"].size(), 1u) << created.body.dump();
+  auto accepted = s->call("POST", "/ext/suggestions/" + created.body["created"][0].get<std::string>() + "/accept");
+  ASSERT_EQ(accepted.status, 200) << accepted.body.dump();
+  auto v = s->get("/ext/songs/" + f1 + "/versions").body;
+  EXPECT_EQ(v["composition"]["name"], "Field") << v.dump();
+  ASSERT_EQ(v["arrangements"].size(), 1u);  // one arrangement by Ito, holding both tracks
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["name"], nullptr);
+  EXPECT_EQ(v["arrangements"][0]["arrangement"]["arrangers"][0]["name"], "Ito");
+  EXPECT_EQ(titles_of(v["arrangements"][0]["songs"]), (std::set<std::string>{"Field (Arcade)", "Field (Live)"}));
+  EXPECT_EQ(s->get("/ext/songs/" + f3).body["arrangementId"],
+            v["arrangements"][0]["arrangement"]["id"]);
+}
+
 TEST_F(ExtTest, ManualCompositionsArrangementsAndRelations) {
   auto comp = s->call("POST", "/ext/compositions", json{{"name", "Field Theme"}, {"composers", {"Kato"}}});
   ASSERT_EQ(comp.status, 201);

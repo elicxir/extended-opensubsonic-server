@@ -48,7 +48,7 @@ path = "/music"
 | `transcode.default_format` | `"opus"` | `format` を指定しない変換の形式 |
 | `transcode.max_concurrent` | `4` | 同時に変換できる数 |
 | `estimate.auto_apply_min_confidence` | `0` | この確信度以上の LLM の推定は承認なしで取り込みます（0 は取り込まない） |
-| `suggest.derivative_patterns` | TV Size、TV Ver.、Instrumental、Off Vocal、Karaoke、Remix の正規表現 | 派生の接尾辞 |
+| `suggest.derivative_patterns` | TV Size、TV Ver.、Instrumental、Off Vocal、Karaoke、Remix の正規表現（Remix は括弧の中の「… Remix」と、末尾の「Remix」「RMX」（後ろに番号があってもよい）） | 派生の接尾辞 |
 | `suggest.medley_separators` | `["〜", "～", " / ", " - "]` | メドレーの曲名の区切り |
 
 ### 独自タグの既定
