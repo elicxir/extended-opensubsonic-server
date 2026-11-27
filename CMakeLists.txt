@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(EOS_BUILD_TESTS "Build the test suite" ON)
+option(EOS_BUILD_CLIENT "Build the client library (client/libeos)" ON)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3>=3.38)
@@ -118,4 +119,11 @@ install(TARGETS eosd eos-admin RUNTIME DESTINATION bin)
 if(EOS_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+# The client library builds on its own too (see client/libeos/CMakeLists.txt). The
+# server image leaves it out by not copying client/.
+if(EOS_BUILD_CLIENT AND EXISTS ${CMAKE_SOURCE_DIR}/client/libeos/CMakeLists.txt)
+  set(LIBEOS_BUILD_TESTS ${EOS_BUILD_TESTS} CACHE BOOL "Build the libeos tests")
+  add_subdirectory(client/libeos)
 endif()
