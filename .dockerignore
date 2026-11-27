@@ -1,0 +1,7 @@
+build/
+data/
+music/
+.git/
+*.db
+*.db-wal
+*.db-shm

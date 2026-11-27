@@ -1,0 +1,15 @@
+# Default config inside the container. Music is mounted at /music (read-only) and the
+# database, secret key and caches live in /data. To change anything, copy this file,
+# edit it and mount it over /etc/eos/eos.toml (see compose.yaml).
+
+[server]
+listen = "0.0.0.0:4540"
+data_dir = "/data"
+log_level = "info"
+
+[[library]]
+name = "Music"
+path = "/music"
+
+[scanner]
+interval = "60m"

@@ -1,0 +1,29 @@
+# eos with Docker Compose.
+#
+#   EOS_MUSIC_DIR=/path/to/music docker compose up -d --build
+#   docker compose exec eos eos-admin user add alice --admin
+#   docker compose exec eos eos-admin tag-report
+#
+# Folders on the host:
+#   EOS_MUSIC_DIR  your music, mounted read-only at /music (default ./music)
+#   EOS_DATA_DIR   database, secret key and caches, mounted at /data (default ./data)
+# The container runs as EOS_UID:EOS_GID (default 1000:1000); that user must be able to
+# read the music and write the data folder.
+
+services:
+  eos:
+    build: .
+    image: eos:latest
+    container_name: eos
+    restart: unless-stopped
+    init: true
+    user: "${EOS_UID:-1000}:${EOS_GID:-1000}"
+    ports:
+      - "${EOS_PORT:-4540}:4540"
+    volumes:
+      - "${EOS_MUSIC_DIR:-./music}:/music:ro"
+      - "${EOS_DATA_DIR:-./data}:/data"
+      # To use your own config, uncomment:
+      # - "./eos.toml:/etc/eos/eos.toml:ro"
+    environment:
+      TZ: "${TZ:-Asia/Tokyo}"
