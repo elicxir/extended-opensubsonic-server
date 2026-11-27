@@ -426,6 +426,44 @@ TEST_F(Live, Graph) {
   }
 }
 
+TEST_F(Live, GraphSimilar) {
+  auto opening = find_song("Opening"), battle = find_song("Battle"), piano = find_song("メインテーマ (Piano)");
+  const GraphQuery q{.seed = "song:" + opening.id, .include = {"similar"}};
+  try {
+    api.graph(q);  // nothing stored yet
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_EQ(e.http_status(), 400);
+  }
+
+  // Store a similarity through the raw door (what audio-embed does), then read it as edges.
+  api.ext_request("PUT", "/ext/similarity/audio_embed", {},
+                  R"({"model": "live-test", "pairs": [[")" + opening.id + R"(", ")" + battle.id + R"(", 0.9], [")" +
+                      opening.id + R"(", ")" + piano.id + R"(", 0.8]]})");
+  auto g = api.graph(q);
+  ASSERT_EQ(g.nodes.size(), 2u);  // Battle is on the same album
+  EXPECT_EQ(g.nodes[1].id, "song:" + piano.id);
+  ASSERT_EQ(g.edges.size(), 1u);
+  EXPECT_EQ(g.edges[0].type, "similar");
+  EXPECT_EQ(g.edges[0].kind, "audio_embed");
+  EXPECT_DOUBLE_EQ(*g.edges[0].score, 0.8);
+
+  auto all = q;
+  all.similar_other_albums = false;
+  g = api.graph(all);
+  ASSERT_EQ(g.nodes.size(), 3u);
+  EXPECT_EQ(g.nodes[1].id, "song:" + battle.id);  // best first
+  all.similar_min_score = 0.85;
+  EXPECT_EQ(api.graph(all).nodes.size(), 2u);
+  all.similar_min_score.reset();
+  all.similar_k = 1;
+  EXPECT_EQ(api.graph(all).nodes.size(), 2u);
+  all.similar_kind = "audio_match";
+  EXPECT_THROW(api.graph(all), Error);
+
+  EXPECT_EQ(api.ext_request("DELETE", "/ext/similarity/audio_embed"), "");
+}
+
 TEST_F(Live, ApiKeysAndRawRequests) {
   auto created = api.create_api_key("second device");
   EXPECT_FALSE(created.key.empty());

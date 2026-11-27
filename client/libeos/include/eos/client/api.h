@@ -73,12 +73,17 @@ struct GraphQuery {
   // GraphNode::id can be passed back as is.
   std::string seed;
   int depth = 2;  // 0..4; song -> composition -> other song is 2 steps
-  // Kinds of edges to follow: composition, relation, title, artist, album.
+  // Kinds of edges to follow: composition, relation, title, artist, album, similar.
   // Empty: the server default (composition, relation, title).
   std::vector<std::string> include;
   std::vector<std::string> roles;  // artist edges only, e.g. {"composer", "arranger"}; empty: all
   int limit = 200;   // most nodes (1..1000); the nearest are kept
   int fanout = 50;   // a node (other than the seed) with more neighbours is not opened
+  // similar edges (followed from the seed only). A kind the server has not stored throws.
+  std::string similar_kind;               // empty: the server default (audio_embed)
+  int similar_k = 5;                      // per song, best first (1..50)
+  std::optional<double> similar_min_score;
+  bool similar_other_albums = true;       // false: songs of the same album count too
 };
 
 using Query = std::vector<std::pair<std::string, std::string>>;

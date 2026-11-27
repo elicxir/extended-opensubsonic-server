@@ -281,6 +281,8 @@ Graph graph(const json& j) {
     edge.role = opt<std::string>(e, "role");
     edge.sub_role = opt<std::string>(e, "subRole");
     edge.is_virtual = get<bool>(e, "virtual");
+    edge.kind = opt<std::string>(e, "kind");
+    edge.score = opt<double>(e, "score");
     return edge;
   });
   return g;

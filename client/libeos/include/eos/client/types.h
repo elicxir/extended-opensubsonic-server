@@ -317,7 +317,7 @@ struct GraphEdge {
   std::string from, to;  // node ids
   // performance (song -> composition), medley / quote / derivative / cover / related
   // (a relation), title (song -> title), credit (song or composition -> artist),
-  // album (song -> album)
+  // album (song -> album), similar (song -- song, with include=similar)
   std::string type;
   bool directed = false;  // relations only: from -> to means something
   std::string provenance;
@@ -332,6 +332,9 @@ struct GraphEdge {
   std::optional<std::string> role, sub_role;
   // album
   bool is_virtual = false;
+  // similar: the kind of similarity (audio_embed, ...) and its score, whose scale depends on the kind
+  std::optional<std::string> kind;
+  std::optional<double> score;
 };
 
 struct Graph {

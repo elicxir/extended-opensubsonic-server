@@ -136,7 +136,9 @@ TEST(Parse, Graph) {
       {"from": "song:t1", "to": "title:w1", "type": "title", "provenance": "llm", "confidence": 0.6},
       {"from": "song:t1", "to": "artist:a1", "type": "credit", "role": "performer", "subRole": "piano",
        "provenance": "tag"},
-      {"from": "song:t1", "to": "album:al1", "type": "album", "virtual": false, "provenance": "tag"}
+      {"from": "song:t1", "to": "album:al1", "type": "album", "virtual": false, "provenance": "tag"},
+      {"from": "song:t1", "to": "song:t9", "type": "similar", "kind": "audio_embed", "score": 0.8197,
+       "provenance": "computed"}
     ]
   })");
   Graph g = parse::graph(j);
@@ -162,7 +164,7 @@ TEST(Parse, Graph) {
   ASSERT_TRUE(g.nodes[4].album);
   EXPECT_EQ(g.nodes[4].album->name, "Box");
 
-  ASSERT_EQ(g.edges.size(), 5u);
+  ASSERT_EQ(g.edges.size(), 6u);
   const auto& perf = g.edges[0];
   EXPECT_EQ(perf.type, "performance");
   EXPECT_FALSE(perf.directed);
@@ -181,6 +183,13 @@ TEST(Parse, Graph) {
   EXPECT_EQ(g.edges[3].role, "performer");
   EXPECT_EQ(g.edges[3].sub_role, "piano");
   EXPECT_FALSE(g.edges[4].is_virtual);
+  EXPECT_FALSE(g.edges[4].score);
+  const auto& similar = g.edges[5];
+  EXPECT_EQ(similar.type, "similar");
+  EXPECT_FALSE(similar.directed);
+  EXPECT_EQ(similar.kind, "audio_embed");
+  EXPECT_DOUBLE_EQ(*similar.score, 0.8197);
+  EXPECT_EQ(similar.provenance, "computed");
 
   // An empty answer and a node type the client does not know yet.
   auto other = parse::graph(json::parse(R"({"nodes": [{"id": "x:1", "type": "x", "label": "?"}]})"));
