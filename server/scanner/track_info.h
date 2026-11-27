@@ -36,7 +36,8 @@ struct TrackInfo {
   std::string title, sort_title, subtitle;
   std::optional<int> disc, track;
   std::string disc_subtitle;
-  std::string release_date, original_date;
+  std::string release_date, original_date;  // release_date falls back to DATE for display
+  std::string release_date_tag;             // RELEASEDATE only: used for the album PID
   std::optional<int> year;
   std::vector<Person> artists, composers, lyricists, arrangers, conductors, performers;
   std::string display_artist, display_composer;

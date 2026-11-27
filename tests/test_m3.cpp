@@ -160,7 +160,7 @@ class M3Test : public ::testing::Test {
     box("04.flac", 470, {{"TITLE", {"Battle"}}, {"TRACKNUMBER", {"4"}}, {"COMPOSER", {"Kato"}},
                          {"COLLECTION_WORK", {"Game Y"}}, {"COLLECTION_ALBUM", {"Game Y Soundtrack"}},
                          {"TITLESORT", {"ばとる"}}});
-    box("05.flac", 480, {{"TITLE", {"Main Theme 〜 Battle"}}, {"TRACKNUMBER", {"5"}},
+    box("05.flac", 480, {{"TITLE", {"Main Theme 〜 Battle (Medley)"}}, {"TRACKNUMBER", {"5"}},
                          {"COLLECTION_WORK", {"Game X; Game Y"}}});
     // The same composition in another album, same arranger but another arrangement name.
     test::make_flac(music / "Live/01.flac", 490,
@@ -333,6 +333,12 @@ TEST_F(M3Test, RuleSuggestions) {
   ASSERT_EQ(m["parts"].size(), 2u);
   EXPECT_EQ(m["parts"][0]["to"]["type"], "composition");
   EXPECT_EQ(m["parts"][1]["to"]["id"], track("Box/04.flac"));
+  // Subtitle-style titles are not medleys: "～X～" is a note, and two matches need the word.
+  for (auto [file, title, hz] : {std::tuple{"Other/03.flac", "Main Theme ～Battle～", 520},
+                                  {"Other/04.flac", "Battle - Main Theme", 530}})
+    test::make_flac(music / file, hz, {{"TITLE", {title}}, {"ALBUM", {"Other"}}, {"ARTIST", {"Kato"}}});
+  scanner->scan(false);
+  EXPECT_EQ(rules()["medley"], 1);
   EXPECT_EQ(payload("same_composition")["tracks"].size(), 2u);
 
   // A rejected suggestion is not raised again; a rescan adds nothing new.

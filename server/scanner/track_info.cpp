@@ -189,6 +189,9 @@ TrackInfo interpret(const RawFile& raw, const std::string& rel_path, int64_t siz
   ti.track = parse_leading_int(first(t, {"TRACKNUMBER"}));
   ti.disc_subtitle = first(t, {"DISCSUBTITLE"});
   ti.release_date = first(t, {"RELEASEDATE", "DATE", "YEAR"});
+  // Only an explicit RELEASEDATE separates albums: DATE often holds each track's
+  // recording year (compilations of live recordings), as in Navidrome.
+  ti.release_date_tag = first(t, {"RELEASEDATE"});
   ti.original_date = first(t, {"ORIGINALDATE", "ORIGINALYEAR"});
   ti.year = year_of(ti.release_date);
 
@@ -253,7 +256,7 @@ TrackInfo interpret(const RawFile& raw, const std::string& rel_path, int64_t siz
     if (f == "albumartistid") return ti.album_artist_id;
     if (f == "album") return ti.album;
     if (f == "albumversion") return ti.album_version;
-    if (f == "releasedate") return ti.release_date;
+    if (f == "releasedate") return ti.release_date_tag;
     return raw_lookup(f);
   });
   ti.track_pid = compute_pid(pids.track, [&](std::string_view f) -> std::string {

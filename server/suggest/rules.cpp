@@ -234,28 +234,35 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
   }
 
   // -- medley
+  // Japanese titles use 〜 and " - " for subtitles ("Theme ～Prologue～"), so a title is
+  // only a medley when it says so (メドレー / medley) or joins three or more titles.
   for (const auto& t : tracks) {
-    auto parts = split_any(t.title, cfg.medley_separators);
+    const auto whole = normalize(t.title);
+    const bool says_medley =
+        whole.find("medley") != std::string::npos || whole.find("めどれー") != std::string::npos;
+    auto parts = split_any(strip(t.title, patterns), cfg.medley_separators);
     if (parts.size() < 2) continue;
     json matched = json::array();
+    std::set<std::string> targets;
     int position = 0;
     for (const auto& part : parts) {
       ++position;
       auto base = normalize(strip(part, patterns));
-      if (base.empty()) continue;
+      if (base.empty() || base == t.base) continue;
+      std::optional<json> to;
       if (auto comp = c.scalar_text("SELECT id FROM composition WHERE name_norm = ? LIMIT 1", base)) {
-        matched.push_back({{"position", position}, {"to", {{"type", "composition"}, {"id", *comp}}}});
-        continue;
+        to = json{{"type", "composition"}, {"id", *comp}};
+      } else if (auto it = by_base.find(base); it != by_base.end()) {
+        for (auto* o : it->second)
+          if (o->id != t.id) {
+            to = json{{"type", "track"}, {"id", o->id}};
+            break;
+          }
       }
-      auto it = by_base.find(base);
-      if (it == by_base.end()) continue;
-      for (auto* o : it->second) {
-        if (o->id == t.id) continue;
-        matched.push_back({{"position", position}, {"to", {{"type", "track"}, {"id", o->id}}}});
-        break;
-      }
+      if (!to || !targets.insert((*to)["id"].get<std::string>()).second) continue;  // no match / repeated
+      matched.push_back({{"position", position}, {"to", *to}});
     }
-    if (matched.size() < 2) continue;
+    if (matched.size() < 2 || (!says_medley && matched.size() < 3)) continue;
     found.push_back({"medley", fp("medley|" + t.id),
                      {{"action", "medley"}, {"from", {{"type", "track"}, {"id", t.id}}}, {"parts", matched}}});
   }

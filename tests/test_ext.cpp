@@ -39,7 +39,7 @@ void make_library(const fs::path& music) {
   box("03.flac", 460, {{"TITLE", {"Main Theme (TV Size)"}}, {"TRACKNUMBER", {"3"}}, {"COLLECTION_WORK", {"Game X"}}});
   box("04.flac", 470, {{"TITLE", {"Battle"}}, {"TRACKNUMBER", {"4"}}, {"COMPOSER", {"Kato"}},
                        {"COLLECTION_WORK", {"Game Y"}}});
-  box("05.flac", 480, {{"TITLE", {"Main Theme 〜 Battle"}}, {"TRACKNUMBER", {"5"}},
+  box("05.flac", 480, {{"TITLE", {"Main Theme 〜 Battle (Medley)"}}, {"TRACKNUMBER", {"5"}},
                        {"COLLECTION_WORK", {"Game X; Game Y"}}});
   test::make_flac(music / "Other/01.flac", 500,
                   {{"TITLE", {"Field"}}, {"ALBUM", {"Other"}}, {"ARTIST", {"Kato"}}, {"COMPOSER", {"Kato"}},
@@ -176,7 +176,7 @@ TEST_F(ExtTest, FoldersAlbumsAndTitles) {
   EXPECT_EQ(groups[0]["title"]["name"], "Game X");
   EXPECT_EQ(groups[0]["songs"].size(), 4u);
   EXPECT_EQ(groups[1]["title"]["name"], "Game Y");
-  EXPECT_EQ(titles_of(groups[1]["songs"]), (std::set<std::string>{"Battle", "Main Theme 〜 Battle"}));
+  EXPECT_EQ(titles_of(groups[1]["songs"]), (std::set<std::string>{"Battle", "Main Theme 〜 Battle (Medley)"}));
 
   auto titles = s->get("/ext/titles?query=game").body;
   EXPECT_EQ(titles["total"], 2);
@@ -410,7 +410,7 @@ TEST_F(ExtTest, SearchGroupsByCompositionAndWork) {
   EXPECT_EQ(titles_of(r["compositions"][0]["songs"]),
             (std::set<std::string>{"Main Theme", "Main Theme (Piano Ver.)"}));
   // Songs already listed under the composition are not repeated.
-  EXPECT_EQ(titles_of(r["songs"]), (std::set<std::string>{"Main Theme (TV Size)", "Main Theme 〜 Battle"}));
+  EXPECT_EQ(titles_of(r["songs"]), (std::set<std::string>{"Main Theme (TV Size)", "Main Theme 〜 Battle (Medley)"}));
   r = s->get("/ext/search?q=game y").body;
   ASSERT_EQ(r["titles"].size(), 1u);
   EXPECT_EQ(r["titles"][0]["songCount"], 2);

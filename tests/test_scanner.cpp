@@ -177,6 +177,23 @@ TEST_F(ScannerTest, RenamedAlbumKeepsItsId) {
   EXPECT_EQ(conn->scalar_int("SELECT COUNT(*) FROM album"), 2);
 }
 
+TEST_F(ScannerTest, OnlyReleaseDateSplitsAnAlbum) {
+  // Recording years in DATE (a compilation of live recordings) keep one album...
+  test::make_flac(music / "H/01.flac", 700, {{"TITLE", {"a"}}, {"ALBUM", {"Art of H"}}, {"ALBUMARTIST", {"H"}},
+                                             {"TRACKNUMBER", {"1"}}, {"DATE", {"1962"}}});
+  test::make_flac(music / "H/02.flac", 710, {{"TITLE", {"b"}}, {"ALBUM", {"Art of H"}}, {"ALBUMARTIST", {"H"}},
+                                             {"TRACKNUMBER", {"2"}}, {"DATE", {"1971"}}});
+  // ...while different release dates (a reissue) make two.
+  test::make_flac(music / "R/01.flac", 720, {{"TITLE", {"c"}}, {"ALBUM", {"Reissued"}}, {"ALBUMARTIST", {"R"}},
+                                             {"RELEASEDATE", {"1990"}}});
+  test::make_flac(music / "R2/01.flac", 730, {{"TITLE", {"c"}}, {"ALBUM", {"Reissued"}}, {"ALBUMARTIST", {"R"}},
+                                              {"RELEASEDATE", {"2020"}}});
+  scanner->scan(false);
+  EXPECT_EQ(conn->scalar_int("SELECT COUNT(*) FROM album WHERE name = 'Art of H'"), 1);
+  EXPECT_EQ(conn->scalar_int("SELECT song_count FROM album WHERE name = 'Art of H'"), 2);
+  EXPECT_EQ(conn->scalar_int("SELECT COUNT(*) FROM album WHERE name = 'Reissued'"), 2);
+}
+
 TEST_F(ScannerTest, ManualOverrideWinsOverTags) {
   make_basic_library();
   scanner->scan(false);
