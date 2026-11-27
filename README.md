@@ -52,3 +52,5 @@ scripts/dev.sh test    # build and run the tests
 
 Layout: `server/` (core, db, auth, scanner, `main.cpp` = eosd), `tools/eos-admin/`,
 `tests/`, `server/db/migrations/*.sql` (embedded at build time).
+`client/libeos/` is the client library (API calls over libcurl; see its
+[README](client/libeos/README.md)). It builds with the server here and on its own in a client app.
