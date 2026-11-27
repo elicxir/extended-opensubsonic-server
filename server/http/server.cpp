@@ -1,5 +1,7 @@
 #include "http/server.h"
 
+#include "http/convert.h"
+
 #include <drogon/drogon.h>
 
 #include <stdexcept>
@@ -20,21 +22,6 @@ std::pair<std::string, uint16_t> split_listen(const std::string& listen) {
   auto port = std::stoi(listen.substr(colon + 1));
   if (port <= 0 || port > 65535) throw std::invalid_argument("invalid port in listen");
   return {host, static_cast<uint16_t>(port)};
-}
-
-api::Request to_request(const drogon::HttpRequestPtr& req) {
-  api::Request r;
-  r.method = req->methodString();
-  r.path = std::string(req->path());
-  api::parse_query(req->query(), r.params);
-  auto ctype = to_lower_ascii(req->getHeader("content-type"));
-  if (req->method() == drogon::Post && ctype.starts_with("application/x-www-form-urlencoded"))
-    api::parse_query(req->body(), r.params);  // formPost extension
-  else
-    r.body = std::string(req->body());
-  for (const auto& [k, v] : req->getHeaders()) r.headers[to_lower_ascii(k)] = v;
-  r.peer_ip = req->peerAddr().toIp();
-  return r;
 }
 
 drogon::HttpResponsePtr to_drogon(const api::Response& r) {
@@ -69,6 +56,21 @@ drogon::HttpResponsePtr to_drogon(const api::Response& r) {
 }
 
 }  // namespace
+
+api::Request to_request(const drogon::HttpRequestPtr& req) {
+  api::Request r;
+  r.method = req->methodString();
+  r.path = std::string(req->path());
+  api::parse_query(req->query(), r.params);
+  auto ctype = to_lower_ascii(req->getHeader("content-type"));
+  if (req->method() == drogon::Post && ctype.starts_with("application/x-www-form-urlencoded"))
+    api::parse_query(req->body(), r.params);  // formPost extension
+  else
+    r.body = std::string(req->body());
+  for (const auto& [k, v] : req->getHeaders()) r.headers[to_lower_ascii(k)] = v;
+  r.peer_ip = req->peerAddr().toIp();
+  return r;
+}
 
 void run(const std::vector<Route>& routes, const std::string& listen, int threads, const std::string& scratch_dir) {
   auto [host, port] = split_listen(listen);

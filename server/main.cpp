@@ -20,6 +20,9 @@
 #include "api/subsonic/router.h"
 #include "db/migrate.h"
 #include "http/server.h"
+#include "http/session_socket.h"
+#include "api/subsonic/auth.h"
+#include "sync/hub.h"
 #include "db/write_queue.h"
 #include "scanner/scanner.h"
 
@@ -89,6 +92,16 @@ int main(int argc, char** argv) {
     api::Services services(cfg, reads, writer, scanner, secret);
     api::Router router(services);
     api::ext::ExtRouter ext_router(services);
+    sync::SessionHub hub(writer);
+    services.hub = &hub;
+    http::register_session_socket(hub, [&](const api::Request& r) -> std::optional<int64_t> {
+      auto lease = reads.acquire();
+      try {
+        return api::authenticate(r, services, *lease).id;
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+    });
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -133,6 +146,7 @@ int main(int argc, char** argv) {
     http::run(routes, cfg.listen, cfg.http_threads, scratch.string());  // blocks until http::stop()
     signal_thread.join();
     scan_thread.join();
+    hub.flush_all();
     writer.stop();
     log::info("stopped");
     return 0;

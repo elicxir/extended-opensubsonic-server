@@ -91,6 +91,8 @@ add_library(eoslib STATIC
   server/api/ext/h_account.cpp
   server/api/ext/h_transfer.cpp
   server/http/server.cpp
+  server/http/session_socket.cpp
+  server/sync/hub.cpp
   ${EOS_MIGRATIONS_CPP})
 target_include_directories(eoslib PUBLIC ${CMAKE_SOURCE_DIR}/server)
 target_compile_definitions(eoslib PUBLIC EOS_VERSION="${PROJECT_VERSION}")

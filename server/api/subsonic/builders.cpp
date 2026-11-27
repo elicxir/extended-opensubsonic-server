@@ -116,7 +116,8 @@ std::vector<Node> Loader::songs(const std::vector<std::string>& ids, const std::
       "t.year, t.size, t.content_type, t.suffix, t.duration_ms, t.bit_rate, t.path, t.created_at, "
       "t.updated_at, t.bit_depth, t.sample_rate, t.channels, t.mbz_recording_id, t.display_composer, "
       "t.sort_title, t.has_embedded_art, al.updated_at, al.display_artist, "
-      "an.play_count, an.last_played_at, an.starred_at, an.rating "
+      "an.play_count, an.last_played_at, an.starred_at, an.rating, "
+      "t.rg_track_gain, t.rg_track_peak, t.rg_album_gain, t.rg_album_peak "
       "FROM json_each(?1) j JOIN track t ON t.id = j.value JOIN album al ON al.id = t.album_id "
       "LEFT JOIN annotation an ON an.user_id = ?2 AND an.item_type = 'track' AND an.item_id = t.id "
       "WHERE t.missing = 0 ORDER BY j.key");
@@ -170,6 +171,19 @@ std::vector<Node> Loader::songs(const std::vector<std::string>& ids, const std::
       }
     }
     n.list("contributors", std::move(contributors), true);
+    // OpenSubsonic ReplayGain: clients apply it themselves (also to transcoded streams,
+    // which carry no tags).
+    if (!st.is_null(29) || !st.is_null(31)) {
+      Node rg("replayGain");
+      auto put = [&](const char* key, int col) {
+        if (!st.is_null(col)) rg.set(key, st.real(col));
+      };
+      put("trackGain", 29);
+      put("trackPeak", 30);
+      put("albumGain", 31);
+      put("albumPeak", 32);
+      n.child(std::move(rg));
+    }
     out.push_back(std::move(n));
   }
   return out;

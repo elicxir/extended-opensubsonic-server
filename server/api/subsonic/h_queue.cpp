@@ -48,12 +48,15 @@ void save_queue(Ctx& c, const std::vector<std::string>& tracks, std::optional<in
             c.user.id, pos++, ids::random_id(), t);
     tx.commit();
   });
+  // Devices following the queue over /ext/session get the new one right away.
+  if (c.svc.hub) c.svc.hub->queue_replaced(c.user.id);
 }
 
 }  // namespace
 
 void add_queue_handlers(HandlerTable& t) {
   t.add("getPlayQueue", [](Ctx& c, Node& root) {
+    if (c.svc.hub) c.svc.hub->flush(c.user.id);  // the live position, not the last saved one
     auto q = load_queue(c.db, c.user.id);
     if (!q) return;
     Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
@@ -89,6 +92,7 @@ void add_queue_handlers(HandlerTable& t) {
   });
 
   t.add("getPlayQueueByIndex", [](Ctx& c, Node& root) {
+    if (c.svc.hub) c.svc.hub->flush(c.user.id);
     auto q = load_queue(c.db, c.user.id);
     if (!q) return;
     Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);

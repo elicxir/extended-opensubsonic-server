@@ -21,6 +21,7 @@
 #include "media/artwork.h"
 #include "media/transcode.h"
 #include "scanner/scanner.h"
+#include "sync/hub.h"
 
 namespace eos::api {
 
@@ -62,6 +63,7 @@ class Services {
   const IpSet rate_limit_exempt;
   media::Artwork artwork;
   media::Transcoder transcoder;
+  sync::SessionHub* hub = nullptr;  // set when /ext/session is served
 
   // Records API key use at most once every 5 minutes per key.
   void touch_api_key(const std::string& key_id);

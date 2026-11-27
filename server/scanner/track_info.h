@@ -45,6 +45,9 @@ struct TrackInfo {
   std::optional<std::string> performance_kind;
   std::string recorded_date;
   std::string arrangement;  // ARRANGEMENT tag
+  // ReplayGain in dB / linear peak (REPLAYGAIN_* tags, or R128_* converted to the
+  // ReplayGain 2.0 reference of -18 LUFS).
+  std::optional<double> rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak;
   std::map<std::string, std::vector<std::string>> custom;  // config tag name -> values
 
   // album
