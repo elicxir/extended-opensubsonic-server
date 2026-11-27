@@ -241,4 +241,51 @@ RelatedItem related_item(const json& j) {
   return r;
 }
 
+Graph graph(const json& j) {
+  Graph g;
+  g.seed = get<std::string>(j, "seed");
+  g.depth = get<int>(j, "depth");
+  g.truncated = get<bool>(j, "truncated");
+  g.nodes = list(j, "nodes", [](const json& n) {
+    GraphNode node;
+    node.id = get<std::string>(n, "id");
+    node.type = get<std::string>(n, "type");
+    node.label = get<std::string>(n, "label");
+    node.distance = get<int>(n, "distance");
+    node.degree = get<int>(n, "degree");
+    node.expanded = get<bool>(n, "expanded");
+    // The body sits under the key named after the type; other types keep only the fields above.
+    if (node.type == "song") node.song = maybe(n, "song", song);
+    else if (node.type == "composition") node.composition = maybe(n, "composition", composition);
+    else if (node.type == "title") node.title = maybe(n, "title", title);
+    else if (node.type == "artist") node.artist = maybe(n, "artist", artist_ref);
+    else if (node.type == "album") node.album = maybe(n, "album", album);
+    return node;
+  });
+  g.edges = list(j, "edges", [](const json& e) {
+    GraphEdge edge;
+    edge.from = get<std::string>(e, "from");
+    edge.to = get<std::string>(e, "to");
+    edge.type = get<std::string>(e, "type");
+    edge.directed = get<bool>(e, "directed");
+    edge.provenance = get<std::string>(e, "provenance");
+    edge.confidence = opt<double>(e, "confidence");
+    edge.arrangement_id = opt<std::string>(e, "arrangementId");
+    edge.arrangement_name = opt<std::string>(e, "arrangementName");
+    edge.arrangement_kind = opt<std::string>(e, "arrangementKind");
+    edge.is_original = get<bool>(e, "isOriginal");
+    edge.relation_id = opt<std::string>(e, "relationId");
+    edge.subtype = opt<std::string>(e, "subtype");
+    edge.note = opt<std::string>(e, "note");
+    edge.position = opt<int>(e, "position");
+    edge.role = opt<std::string>(e, "role");
+    edge.sub_role = opt<std::string>(e, "subRole");
+    edge.is_virtual = get<bool>(e, "virtual");
+    edge.kind = opt<std::string>(e, "kind");
+    edge.score = opt<double>(e, "score");
+    return edge;
+  });
+  return g;
+}
+
 }  // namespace eos::client::parse

@@ -295,6 +295,56 @@ struct Preferred {
   std::string composition_id, song_id;
 };
 
+// GET /ext/graph: the neighbourhood of one item as nodes and edges. Groups (composition,
+// title, artist, album) are nodes of their own; songs of one composition point at the
+// composition node rather than at each other. No positions: the client lays it out.
+struct GraphNode {
+  std::string id;    // "<type>:<id>", e.g. "song:abc". Pass it as GraphQuery::seed to open the node
+  std::string type;  // song, composition, title, artist, album
+  std::string label;
+  int distance = 0;  // steps from the seed; nodes come nearest first
+  int degree = 0;    // neighbours of this node within the kinds asked for
+  bool expanded = false;  // false: some neighbours are not in this graph; ask again with this node as seed
+  // The item itself; the one matching `type` is set.
+  std::optional<Song> song;
+  std::optional<Composition> composition;
+  std::optional<Title> title;
+  std::optional<ArtistRef> artist;
+  std::optional<Album> album;
+};
+
+struct GraphEdge {
+  std::string from, to;  // node ids
+  // performance (song -> composition), medley / quote / derivative / cover / related
+  // (a relation), title (song -> title), credit (song or composition -> artist),
+  // album (song -> album), similar (song -- song, with include=similar)
+  std::string type;
+  bool directed = false;  // relations only: from -> to means something
+  std::string provenance;
+  std::optional<double> confidence;  // estimated links only
+  // performance
+  std::optional<std::string> arrangement_id, arrangement_name, arrangement_kind;
+  bool is_original = false;
+  // relations
+  std::optional<std::string> relation_id, subtype, note;
+  std::optional<int> position;
+  // credit
+  std::optional<std::string> role, sub_role;
+  // album
+  bool is_virtual = false;
+  // similar: the kind of similarity (audio_embed, ...) and its score, whose scale depends on the kind
+  std::optional<std::string> kind;
+  std::optional<double> score;
+};
+
+struct Graph {
+  std::string seed;  // node id of the centre
+  int depth = 0;
+  std::vector<GraphNode> nodes;
+  std::vector<GraphEdge> edges;  // every edge between two nodes in `nodes`
+  bool truncated = false;        // the node limit was reached
+};
+
 struct ApiKeyInfo {
   std::string id, device_name, created_at;
   std::optional<std::string> last_used_at;

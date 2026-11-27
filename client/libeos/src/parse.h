@@ -62,5 +62,6 @@ Arrangement arrangement(const json& j);
 ArrangementSongs arrangement_songs(const json& j);
 Relation relation(const json& j);
 RelatedItem related_item(const json& j);
+Graph graph(const json& j);
 
 }  // namespace eos::client::parse

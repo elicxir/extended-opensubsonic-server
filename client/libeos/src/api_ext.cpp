@@ -1,4 +1,9 @@
 // /ext calls. See docs/ext-api.md.
+#include <algorithm>
+#include <iomanip>
+#include <locale>
+#include <sstream>
+
 #include "impl.h"
 #include "parse.h"
 
@@ -173,6 +178,33 @@ ExtSearchResult Api::ext_search(const std::string& q, int limit) {
     r.artists = parse::list(j, "artists", parse::artist);
     return r;
   });
+}
+
+Graph Api::graph(const GraphQuery& gq) {
+  auto csv = [](const std::vector<std::string>& v) {
+    std::string out;
+    for (const auto& s : v) out += (out.empty() ? "" : ",") + s;
+    return out;
+  };
+  Query q{{"seed", gq.seed},
+          {"depth", std::to_string(gq.depth)},
+          {"limit", std::to_string(gq.limit)},
+          {"fanout", std::to_string(gq.fanout)}};
+  if (!gq.include.empty()) q.emplace_back("include", csv(gq.include));
+  if (!gq.roles.empty()) q.emplace_back("roles", csv(gq.roles));
+  if (std::find(gq.include.begin(), gq.include.end(), "similar") != gq.include.end()) {
+    if (!gq.similar_kind.empty()) q.emplace_back("similarKind", gq.similar_kind);
+    q.emplace_back("similarK", std::to_string(gq.similar_k));
+    if (gq.similar_min_score) {
+      std::ostringstream s;
+      s.imbue(std::locale::classic());
+      s << std::setprecision(17) << *gq.similar_min_score;
+      q.emplace_back("similarMinScore", s.str());
+    }
+    q.emplace_back("similarOtherAlbums", gq.similar_other_albums ? "true" : "false");
+  }
+  auto j = impl_->ext_get("/ext/graph", std::move(q));
+  return parsed("/ext/graph", [&] { return parse::graph(j); });
 }
 
 // ---- preferred versions ----

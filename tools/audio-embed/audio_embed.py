@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""One vector per song from a pretrained audio model, and the songs nearest to a song.
+
+This finds songs that *sound* alike (instruments, mood, tempo). It does not find other
+versions of the same tune: a piano version sits next to other piano pieces, not next to
+its original. That is what audio-match is for.
+
+How a song becomes a vector:
+  1. 10-second windows are read at even steps through the file (at most --windows)
+  2. each window goes through CLAP (music checkpoint) and gives a 512-dim vector
+  3. the windows are averaged and the result is scaled to length 1
+Two songs are compared by the dot product of their vectors after the mean vector of the
+library is taken away (cosine similarity around the centre; --raw skips that).
+
+Vectors are cached per song in --cache/<model>/<audio md5>.npy (the track id when the file
+has no MD5), so a second run only embeds new songs, and the cache works with any database
+of the same files. The model runs on CUDA when available (--device to choose).
+
+  audio_embed.py embed --db eos.db --music /music --cache /cache
+  audio_embed.py near  --db eos.db --cache /cache "Zufall" [--other-albums] [-k 10]
+  audio_embed.py check --db eos.db --cache /cache [--groups title]  # how close are known versions?
+  audio_embed.py store --db eos.db --cache /cache --server http://eos:4540 [--k 50]  # EOS_API_KEY
+
+store sends each song's top K neighbours to the server, replacing the kind (docs/similarity.md).
+--db must be the server's own database: the pairs are sent as its track ids.
+"""
+import argparse
+import os
+import sqlite3
+import sys
+import time
+
+import numpy as np
+
+MODEL = "laion/larger_clap_music"
+RATE = 48000      # what CLAP expects
+WINDOW_S = 10     # CLAP looks at 10 seconds at a time
+FEATURE_VERSION = 1
+
+
+def open_db(path):
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+def tracks(db):
+    """(id, path, duration_s, title, album, album_id, key) of every song that is not missing.
+
+    key names the cached vector: the audio MD5 when the file has one, so vectors computed
+    against one database can be reused with another (track ids differ between scans)."""
+    return [r[:6] + (r[6] or "id-" + r[0],) for r in db.execute(
+        "SELECT t.id, t.path, t.duration_ms / 1000.0, t.title, al.name, al.id, nullif(t.audio_md5, '') FROM track t "
+        "JOIN album al ON al.id = t.album_id WHERE t.missing = 0 ORDER BY al.name, t.disc_number, t.track_number"
+    ).fetchall()]
+
+
+def cache_dir(args):
+    d = os.path.join(args.cache, f"{args.model.replace('/', '--')}-v{FEATURE_VERSION}-w{args.windows}")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def read_windows(path, max_windows):
+    """Mono 48 kHz windows of WINDOW_S seconds, evenly spread, skipping the very start and end."""
+    import soundfile as sf
+    import soxr
+
+    with sf.SoundFile(path) as f:
+        rate, total = f.samplerate, f.frames
+        size = WINDOW_S * rate
+        if total <= size:
+            starts = [0]
+        else:
+            n = int(min(max_windows, max(1, total // (2 * size))))
+            # centres at 1/(n+1), 2/(n+1), ... of the song
+            starts = [int((i + 1) * total / (n + 1) - size / 2) for i in range(n)]
+        out = []
+        for s in starts:
+            f.seek(max(0, min(s, max(0, total - size))))
+            x = f.read(size, dtype="float32", always_2d=True).mean(axis=1)
+            if rate != RATE:
+                x = soxr.resample(x, rate, RATE)
+            out.append(x.astype(np.float32))
+        return out
+
+
+class _Songs:
+    """Decoding and the mel features run on the CPU; a DataLoader runs them in worker processes
+    so the model (on the GPU) does not wait for them."""
+
+    def __init__(self, todo, args):
+        self.todo, self.music, self.windows, self.model = todo, args.music, args.windows, args.model
+        self.processor = None
+
+    def __len__(self):
+        return len(self.todo)
+
+    def __getitem__(self, i):
+        rel = self.todo[i][1]
+        try:
+            if self.processor is None:  # one per worker process
+                import torch
+                from transformers import ClapProcessor
+
+                torch.set_num_threads(1)
+                self.processor = ClapProcessor.from_pretrained(self.model)
+            windows = read_windows(os.path.join(self.music, rel), self.windows)
+            return i, dict(self.processor(audios=windows, sampling_rate=RATE, return_tensors="pt")), None
+        except Exception as e:  # one unreadable file must not stop the run
+            return i, None, f"{type(e).__name__}: {e}"
+
+
+def cmd_embed(args):
+    import torch
+    from torch.utils.data import DataLoader
+    from transformers import ClapModel, ClapProcessor
+
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    torch.set_num_threads(args.threads)
+    out_dir = cache_dir(args)
+    todo, seen = [], set()
+    for t in tracks(open_db(args.db)):
+        if t[6] not in seen and not os.path.exists(os.path.join(out_dir, t[6] + ".npy")):
+            todo.append(t)
+        seen.add(t[6])
+    if args.limit:
+        todo = todo[: args.limit]
+    print(f"{len(todo)} songs to embed -> {out_dir} on {device}"
+          + (f" ({torch.cuda.get_device_name(0)})" if device.startswith("cuda") else ""), flush=True)
+    if not todo:
+        return
+    model = ClapModel.from_pretrained(args.model).eval().to(device)
+    ClapProcessor.from_pretrained(args.model)  # download once here, not in every worker at the same time
+    loader = DataLoader(_Songs(todo, args), batch_size=None, num_workers=args.workers,
+                        prefetch_factor=4 if args.workers else None)
+
+    started, done, failed, seconds = time.time(), 0, 0, 0.0
+    for i, inputs, error in loader:
+        _tid, rel, duration, _title, _album, _aid, key = todo[i]
+        try:
+            if error:
+                raise RuntimeError(error)
+            vectors = []
+            n = len(inputs["input_features"])
+            for s in range(0, n, args.batch):
+                part = {k: v[s : s + args.batch].to(device) for k, v in inputs.items()}
+                with torch.inference_mode():
+                    vectors.append(model.get_audio_features(**part).float().cpu().numpy())
+            v = np.concatenate(vectors).mean(axis=0)
+            v /= np.linalg.norm(v) + 1e-12
+            tmp = os.path.join(out_dir, key + ".tmp.npy")
+            np.save(tmp, v.astype(np.float32))
+            os.replace(tmp, os.path.join(out_dir, key + ".npy"))
+            done += 1
+            seconds += duration
+        except Exception as e:  # one unreadable file must not stop the run
+            failed += 1
+            print(f"  failed: {rel}: {e}", file=sys.stderr, flush=True)
+        if (done + failed) % 50 == 0:
+            el = time.time() - started
+            left = el / (done + failed) * (len(todo) - done - failed)
+            print(f"  {done + failed}/{len(todo)}  {el / 60:.1f} min, about {left / 60:.0f} min left", flush=True)
+    print(f"done: {done} embedded, {failed} failed, {(time.time() - started) / 60:.1f} min "
+          f"for {seconds / 3600:.1f} h of music", flush=True)
+
+
+def load(args):
+    """ids, rows (same order) and the matrix of vectors, for the songs that have one."""
+    out_dir = cache_dir(args)
+    rows, vectors = [], []
+    for t in tracks(open_db(args.db)):
+        p = os.path.join(out_dir, t[6] + ".npy")
+        if os.path.exists(p):
+            rows.append(t)
+            vectors.append(np.load(p))
+    if not rows:
+        sys.exit(f"no vectors in {out_dir}: run 'embed' first")
+    m = np.stack(vectors)
+    if not args.raw:
+        # CLAP vectors share a large common part: raw, every pair of songs scores 0.96-0.996.
+        # Without the library's mean the order barely changes but the scores spread out
+        # (median about 0), which is what a threshold or an edge weight needs.
+        m = m - m.mean(axis=0)
+        m /= np.linalg.norm(m, axis=1, keepdims=True) + 1e-12
+    return rows, m
+
+
+def cmd_near(args):
+    rows, m = load(args)
+    q = args.query.lower()
+    hits = [i for i, r in enumerate(rows) if r[0] == args.query or q in r[3].lower()]
+    if not hits:
+        sys.exit(f"no song with id or title like {args.query!r}")
+    for i in hits[: args.max_queries]:
+        print(f"\n{rows[i][3]}  [{rows[i][4]}]  {rows[i][0]}")
+        sims = m @ m[i]
+        shown = 0
+        for j in np.argsort(-sims):
+            if j == i or (args.other_albums and rows[j][5] == rows[i][5]):
+                continue
+            print(f"  {sims[j]:.3f}  {rows[j][3]}  [{rows[j][4]}]")
+            shown += 1
+            if shown >= args.k:
+                break
+
+
+def top_pairs(m, k, chunk=1024):
+    """Each song's k nearest songs, as the union of unordered pairs {(i, j): score} with i < j."""
+    pairs = {}
+    k = min(k, len(m) - 1)
+    for start in range(0, len(m), chunk):
+        s = m[start : start + chunk] @ m.T
+        rows = np.arange(len(s))
+        s[rows, rows + start] = -np.inf  # not the song itself
+        top = np.argpartition(-s, k - 1, axis=1)[:, :k] if k > 0 else np.zeros((len(s), 0), int)
+        for r, js in enumerate(top):
+            i = start + r
+            for j in js:
+                pairs[(i, j) if i < j else (j, i)] = float(s[r, j])
+    return pairs
+
+
+def cmd_store(args):
+    """Send each song's top K neighbours to the server (PUT /ext/similarity/<kind>), replacing that kind."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    key = args.api_key or os.environ.get("EOS_API_KEY")
+    if not key:
+        sys.exit("an admin API key is needed: --api-key or EOS_API_KEY")
+    rows, m = load(args)
+    pairs = top_pairs(m, args.k)
+    body = {
+        "model": args.model,
+        "params": {"windows": args.windows, "centered": not args.raw, "k": args.k, "featureVersion": FEATURE_VERSION},
+        "trackCount": len(rows),
+        "pairs": [[rows[i][0], rows[j][0], round(score, 4)] for (i, j), score in sorted(pairs.items())],
+    }
+    data = json.dumps(body, separators=(",", ":")).encode()
+    print(f"{len(rows)} songs, {len(pairs)} pairs (top {args.k}), {len(data) / 1e6:.1f} MB -> "
+          f"{args.server.rstrip('/')}/ext/similarity/{args.kind}", flush=True)
+    req = urllib.request.Request(f"{args.server.rstrip('/')}/ext/similarity/{args.kind}", data=data, method="PUT",
+                                 headers={"Content-Type": "application/json", "X-Api-Key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            reply = json.load(resp)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"server said {e.code}: {e.read().decode(errors='replace')}")
+    print(f"stored {reply['pairCount']} pairs over {reply['trackCount']} songs"
+          + (f"; {reply['skipped']} pairs skipped (songs the server does not know: was --db its database?)"
+             if reply["skipped"] else ""))
+
+
+def _plain_title(title):
+    """Lower case, without bracketed parts and version words: "Zufall (Piano Ver.)" -> "zufall"."""
+    import re
+    import unicodedata
+
+    t = unicodedata.normalize("NFKC", title).lower()
+    t = re.sub(r"[(\[（【〜~].*?([)\]）】〜~]|$)", " ", t)
+    t = re.sub(r"\b(rmx|remix|ver\.?|version|arrange|arranged|piano|orchestra|live)\b", " ", t)
+    return re.sub(r"[\W_]+", " ", t).strip()
+
+
+def cmd_check(args):
+    """Known versions of one composition as a yardstick: where do they rank among the neighbours?"""
+    rows, m = load(args)
+    index = {r[0]: i for i, r in enumerate(rows)}
+    groups = {}
+    if args.groups == "title":
+        # a rough yardstick for a database without compositions: the same title on more than
+        # one album. Noisy: jingles that only share a name ("Game Over") count as versions too.
+        for i, r in enumerate(rows):
+            groups.setdefault(_plain_title(r[3]), []).append(i)
+        groups = {k: v for k, v in groups.items() if k and len({rows[i][5] for i in v}) > 1}
+    else:
+        for tid, comp in open_db(args.db).execute(
+                "SELECT e.track_id, a.composition_id FROM track_arrangement_eff e JOIN arrangement a ON a.id = e.arrangement_id"):
+            if tid in index:
+                groups.setdefault(comp, []).append(index[tid])
+    print(f"{len(rows)} songs, {len(groups)} groups of versions ({args.groups}), "
+          f"{sum(len(v) for v in groups.values())} songs in them; a random order would give median rank {len(rows) // 2}")
+    sims = m @ m.T
+    np.fill_diagonal(sims, -1)
+    order = np.argsort(-sims, axis=1)
+    rank = np.empty_like(order)
+    rank[np.arange(len(rows))[:, None], order] = np.arange(len(rows))[None, :]
+    ranks, same_album, cross_album = [], [], []
+    for members in groups.values():
+        for a in members:
+            for b in members:
+                if a == b:
+                    continue
+                ranks.append(rank[a, b] + 1)
+                (same_album if rows[a][5] == rows[b][5] else cross_album).append(rank[a, b] + 1)
+    for name, r in (("all pairs", ranks), ("same album", same_album), ("other album", cross_album)):
+        if r:
+            r = np.array(r)
+            print(f"{name:12} n={len(r):5}  median rank {int(np.median(r)):4}  in top 10: {np.mean(r <= 10):.0%}  "
+                  f"in top 50: {np.mean(r <= 50):.0%}")
+    top = order[:, :10]
+    albums = np.array([r[5] for r in rows])
+    print(f"neighbours from the same album (top 10): {np.mean(albums[top] == albums[:, None]):.0%}")
+    upper = sims[np.triu_indices(len(rows), 1)]
+    print(f"similarity of all pairs: median {np.median(upper):.3f}, 99th percentile {np.percentile(upper, 99):.3f}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--db", required=True, help="the eos database (opened read-only)")
+    ap.add_argument("--cache", default=os.environ.get("EOS_EMBED_CACHE", "/cache/audio-embed"))
+    ap.add_argument("--model", default=MODEL)
+    ap.add_argument("--windows", type=int, default=6, help="most 10-second windows per song")
+    ap.add_argument("--raw", action="store_true", help="near/check: compare without subtracting the mean vector")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    e = sub.add_parser("embed")
+    e.add_argument("--music", default=os.environ.get("EOS_MUSIC", "/music"))
+    e.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 2) - 2),
+                   help="torch threads in the main process (matters on the CPU)")
+    e.add_argument("--workers", type=int, default=min(8, max(0, (os.cpu_count() or 2) - 2)),
+                   help="processes that decode files and compute features (0 = in the main process)")
+    e.add_argument("--device", default="", help="cuda, cpu, ... (default: cuda when available)")
+    e.add_argument("--batch", type=int, default=6, help="windows per model call")
+    e.add_argument("--limit", type=int, default=0, help="stop after this many songs (for timing)")
+    e.set_defaults(fn=cmd_embed)
+    n = sub.add_parser("near")
+    n.add_argument("query", help="a track id, or part of a title")
+    n.add_argument("-k", type=int, default=10)
+    n.add_argument("--other-albums", action="store_true", help="leave out songs of the same album")
+    n.add_argument("--max-queries", type=int, default=3)
+    n.set_defaults(fn=cmd_near)
+    c = sub.add_parser("check")
+    c.add_argument("--groups", choices=("composition", "title"), default="composition",
+                   help="what counts as versions of one piece (title: same title on other albums)")
+    c.set_defaults(fn=cmd_check)
+    s = sub.add_parser("store", help="send each song's top K neighbours to the server")
+    s.add_argument("--server", default=os.environ.get("EOS_SERVER", "http://localhost:4540"))
+    s.add_argument("--api-key", default="", help="an admin API key (default: $EOS_API_KEY)")
+    s.add_argument("--kind", default="audio_embed")
+    s.add_argument("--k", type=int, default=50, help="neighbours kept per song")
+    s.set_defaults(fn=cmd_store)
+    args = ap.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

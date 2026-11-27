@@ -1,6 +1,7 @@
 // M4: the /ext API, end to end through ExtRouter (no network).
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -493,4 +494,290 @@ TEST_F(ExtTest, ExportAndImportIntoFreshDatabase) {
   // Importing twice adds nothing new.
   auto again = fresh.call("POST", "/ext/import", exported.body);
   EXPECT_FALSE(again.body["imported"].contains("relations"));
+}
+
+namespace {
+
+const json* find_node(const json& g, const std::string& id) {
+  for (const auto& n : g["nodes"])
+    if (n["id"] == id) return &n;
+  return nullptr;
+}
+
+size_t count_edges(const json& g, const std::string& type) {
+  size_t n = 0;
+  for (const auto& e : g["edges"]) n += e["type"] == type;
+  return n;
+}
+
+}  // namespace
+
+TEST_F(ExtTest, GraphAroundASong) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       t5 = s->track("Box/05.flac");
+  std::string comp = s->get("/ext/songs/" + t1).body["compositionId"];
+
+  // Two steps: the composition and the work, then the other songs they hold.
+  auto r = s->get("/ext/graph?seed=song:" + t1, &s->user_key);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  auto g = r.body;
+  EXPECT_EQ(g["seed"], "song:" + t1);
+  EXPECT_EQ(g["truncated"], false);
+  EXPECT_EQ(g["nodes"].size(), 6u);  // 01, composition, Game X, 02, 03, 05
+  EXPECT_EQ(g["nodes"][0]["id"], "song:" + t1);
+  EXPECT_EQ(g["nodes"][0]["label"], "Main Theme");
+  EXPECT_EQ(g["nodes"][0]["distance"], 0);
+  EXPECT_EQ(g["nodes"][0]["song"]["compositionId"], comp);
+  EXPECT_EQ(count_edges(g, "performance"), 2u);
+  EXPECT_EQ(count_edges(g, "title"), 4u);
+  EXPECT_EQ(g["edges"].size(), 6u);
+  auto* c = find_node(g, "composition:" + comp);
+  ASSERT_NE(c, nullptr);
+  EXPECT_EQ((*c)["type"], "composition");
+  EXPECT_EQ((*c)["label"], "Main Theme");
+  EXPECT_EQ((*c)["degree"], 2);
+  EXPECT_EQ((*c)["expanded"], true);
+  EXPECT_EQ((*c)["composition"]["id"], comp);
+  // The medley is also in Game Y, which is three steps away.
+  auto* medley = find_node(g, "song:" + t5);
+  ASSERT_NE(medley, nullptr);
+  EXPECT_EQ((*medley)["distance"], 2);
+  EXPECT_EQ((*medley)["degree"], 2);
+  EXPECT_EQ((*medley)["expanded"], false);
+  for (const auto& e : g["edges"]) {
+    if (e["type"] != "performance" || e["from"] != "song:" + t2) continue;
+    EXPECT_EQ(e["to"], "composition:" + comp);
+    EXPECT_EQ(e["arrangementName"], "Piano Ver.");
+    EXPECT_EQ(e["arrangementKind"], "piano");
+    EXPECT_EQ(e["isOriginal"], false);
+    EXPECT_EQ(e["provenance"], "tag");
+  }
+
+  // One step only: the hubs are shown but not opened.
+  auto g1 = s->get("/ext/graph?seed=track:" + t1 + "&depth=1").body;
+  EXPECT_EQ(g1["nodes"].size(), 3u);
+  EXPECT_EQ(g1["edges"].size(), 2u);
+  EXPECT_EQ((*find_node(g1, "composition:" + comp))["expanded"], false);
+
+  // A relation joins a song to the composition, with a direction.
+  auto rel = s->call("POST", "/ext/relations",
+                     json{{"from", {{"type", "track"}, {"id", t4}}},
+                          {"to", {{"type", "composition"}, {"id", comp}}},
+                          {"type", "quote"}});
+  ASSERT_EQ(rel.status, 201);
+  g = s->get("/ext/graph?seed=song:" + t1).body;
+  EXPECT_EQ(g["nodes"].size(), 7u);
+  ASSERT_EQ(count_edges(g, "quote"), 1u);
+  for (const auto& e : g["edges"]) {
+    if (e["type"] != "quote") continue;
+    EXPECT_EQ(e["from"], "song:" + t4);
+    EXPECT_EQ(e["to"], "composition:" + comp);
+    EXPECT_EQ(e["directed"], true);
+    EXPECT_EQ(e["relationId"], rel.body["id"]);
+    EXPECT_EQ(e["provenance"], "manual");
+  }
+  EXPECT_EQ(count_edges(s->get("/ext/graph?seed=song:" + t1 + "&include=composition,title").body, "quote"), 0u);
+
+  // The node budget keeps the nearest nodes.
+  auto small = s->get("/ext/graph?seed=song:" + t1 + "&limit=3").body;
+  EXPECT_EQ(small["nodes"].size(), 3u);
+  EXPECT_EQ(small["truncated"], true);
+
+  // Any node can be the centre.
+  auto from_comp = s->get("/ext/graph?seed=composition:" + comp + "&depth=1").body;
+  EXPECT_EQ(from_comp["nodes"].size(), 4u);  // composition, 01, 02, 04
+  EXPECT_EQ(from_comp["edges"].size(), 3u);
+
+  EXPECT_EQ(s->get("/ext/graph").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:nope").status, 404);
+  EXPECT_EQ(s->get("/ext/graph?seed=folder:1").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + t1 + "&include=bogus").status, 400);
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + t1 + "&depth=two").status, 400);
+}
+
+TEST_F(ExtTest, GraphPeopleAndAlbumsOnRequest) {
+  auto kato = s->conn->scalar_text("SELECT id FROM artist WHERE name = 'Kato'").value_or("");
+  ASSERT_FALSE(kato.empty());
+  auto o1 = s->track("Other/01.flac");
+
+  // People are not followed unless asked for.
+  EXPECT_EQ(s->get("/ext/graph?seed=song:" + o1).body["nodes"].size(), 1u);
+
+  // Kato composed Battle and both Field tracks, and performs the Field tracks.
+  auto g = s->get("/ext/graph?seed=artist:" + kato + "&include=artist&depth=1").body;
+  EXPECT_EQ(g["nodes"].size(), 4u);
+  EXPECT_EQ(g["nodes"][0]["label"], "Kato");
+  EXPECT_EQ(count_edges(g, "credit"), 5u);
+  g = s->get("/ext/graph?seed=artist:" + kato + "&include=artist&depth=1&roles=composer").body;
+  EXPECT_EQ(g["edges"].size(), 3u);
+  for (const auto& e : g["edges"]) {
+    EXPECT_EQ(e["role"], "composer");
+    EXPECT_EQ(e["to"], "artist:" + kato);
+  }
+
+  // From a song, a person leads to their other songs...
+  g = s->get("/ext/graph?seed=song:" + o1 + "&include=artist").body;
+  EXPECT_EQ(g["nodes"].size(), 4u);  // Field, Kato, Battle, Field (Arrange)
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["expanded"], true);
+  // ...unless they have too many: then the node is shown with its size and left closed.
+  g = s->get("/ext/graph?seed=song:" + o1 + "&include=artist&fanout=2").body;
+  EXPECT_EQ(g["nodes"].size(), 2u);
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["degree"], 3);
+  EXPECT_EQ((*find_node(g, "artist:" + kato))["expanded"], false);
+  EXPECT_EQ(g["truncated"], false);
+
+  // Albums: the physical album and the virtual albums of a song.
+  auto box = s->album("Collection Box");
+  g = s->get("/ext/graph?seed=album:" + box + "&include=album&depth=1").body;
+  EXPECT_EQ(g["nodes"].size(), 6u);
+  EXPECT_EQ(g["nodes"][0]["album"]["kind"], "physical");
+  EXPECT_EQ(g["edges"].size(), 5u);
+  auto* first = find_node(g, "song:" + s->track("Box/01.flac"));
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ((*first)["degree"], 2);  // also in the virtual album "Game X Soundtrack"
+  EXPECT_EQ((*first)["expanded"], false);
+}
+
+TEST_F(ExtTest, SimilarityReplacedOneKindAtATime) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       f1 = s->track("Other/01.flac");
+  ASSERT_FALSE(t1.empty());
+  auto info = s->get("/ext/info").body;
+  EXPECT_NE(std::find(info["features"].begin(), info["features"].end(), "similarity"), info["features"].end());
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 0);
+
+  // Either order; a pair given twice keeps the higher score; a song with itself and unknown
+  // ids are dropped (the unknown one is reported).
+  json body = {{"model", "test-model"},
+               {"params", {{"k", 2}, {"centered", true}}},
+               {"trackCount", 7},
+               {"pairs", json::array({json::array({t2, t1, 0.5}), json::array({t1, t2, 0.75}),
+                                      json::array({t1, t4, 0.25}), json::array({t1, t1, 1.0}),
+                                      json::array({t1, "nosuchsong", 0.9})})}};
+  auto r = s->call("PUT", "/ext/similarity/audio_embed", body);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  EXPECT_EQ(r.body["pairCount"], 2);
+  EXPECT_EQ(r.body["skipped"], 1);
+  auto pair_score = [&](const std::string& kind, std::string a, std::string b) {
+    if (b < a) std::swap(a, b);
+    auto st = s->conn->prepare("SELECT score FROM similarity WHERE kind = ? AND track_a = ? AND track_b = ?");
+    st.bind_all(kind, a, b);
+    return st.step() ? st.real(0) : -1.0;
+  };
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t1, t2), 0.75);
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t4, t1), 0.25);
+
+  auto sets = s->get("/ext/similarity").body;
+  ASSERT_EQ(sets["total"], 1);
+  EXPECT_EQ(sets["items"][0]["kind"], "audio_embed");
+  EXPECT_EQ(sets["items"][0]["model"], "test-model");
+  EXPECT_EQ(sets["items"][0]["params"]["k"], 2);
+  EXPECT_EQ(sets["items"][0]["trackCount"], 7);
+  EXPECT_EQ(sets["items"][0]["pairCount"], 2);
+
+  // Another kind lives beside it; replacing a kind drops its old pairs only.
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_match",
+                    json{{"model", "m2"}, {"pairs", json::array({json::array({t1, f1, 0.1})})}})
+                .status,
+            200);
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_embed",
+                    json{{"model", "test-model"}, {"pairs", json::array({json::array({t2, t4, 0.5})})}})
+                .status,
+            200);
+  EXPECT_EQ(pair_score("audio_embed", t1, t2), -1.0);
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t2, t4), 0.5);
+  EXPECT_DOUBLE_EQ(pair_score("audio_match", t1, f1), 0.1);
+  sets = s->get("/ext/similarity").body;
+  ASSERT_EQ(sets["total"], 2);
+  EXPECT_EQ(sets["items"][0]["kind"], "audio_embed");
+  EXPECT_EQ(sets["items"][0]["trackCount"], 2);  // no trackCount: the songs that have a pair
+
+  // A purged song takes its pairs with it.
+  s->conn->exec("PRAGMA foreign_keys = ON");
+  s->conn->run("DELETE FROM track WHERE id = ?", f1);
+  EXPECT_EQ(s->conn->scalar_int("SELECT COUNT(*) FROM similarity WHERE kind = 'audio_match'"), 0);
+
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_match").status, 204);
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_match").status, 404);
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 1);
+}
+
+TEST_F(ExtTest, SimilarityIsForAdministratorsAndChecksItsInput) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac");
+  json good = {{"model", "m"}, {"pairs", json::array({json::array({t1, t2, 0.5})})}};
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", good, &s->user_key).status, 403);
+  EXPECT_EQ(s->get("/ext/similarity", &s->user_key).status, 403);
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_embed", nullptr, &s->user_key).status, 403);
+
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/Audio-Embed", good).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"pairs", json::array()}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed",
+                    json{{"model", "m"}, {"pairs", json::array({json::array({t1, 0.5})})}})
+                .status,
+            400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}, {"params", 3}, {"pairs", json::array()}})
+                .status,
+            400);
+  // A bad request changes nothing.
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 0);
+  // An empty set is allowed (a kind with no pairs yet).
+  auto r = s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}, {"pairs", json::array()}});
+  EXPECT_EQ(r.status, 200);
+  EXPECT_EQ(r.body["pairCount"], 0);
+}
+
+TEST_F(ExtTest, GraphSimilarFromTheSeedOnly) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       t5 = s->track("Box/05.flac"), f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  const auto seed = "/ext/graph?seed=song:" + t1 + "&include=similar";
+  // No similarity stored yet: asking for it is an error, not an empty graph.
+  EXPECT_EQ(s->get(seed).status, 400);
+
+  json body = {{"model", "test-model"},
+               {"pairs", json::array({json::array({t1, f1, 0.9}), json::array({t1, f2, 0.8}),
+                                      json::array({t1, t2, 0.95}), json::array({t1, t4, 0.3}),
+                                      json::array({f1, f2, 0.7}), json::array({f1, t5, 0.85})})}};
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_embed", body).status, 200);
+
+  // Default: the 5 best from other albums (Box/02 and Box/04 share the seed's album). The
+  // neighbours are not walked further: Box/05 is only similar to Other/01.
+  auto r = s->get(seed + "&depth=3", &s->user_key);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  auto g = r.body;
+  EXPECT_EQ(g["nodes"].size(), 3u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + f1);  // best first
+  EXPECT_EQ(g["nodes"][2]["id"], "song:" + f2);
+  EXPECT_EQ(find_node(g, "song:" + t5), nullptr);
+  EXPECT_EQ(count_edges(g, "similar"), 2u);  // Other/01 and /02 share an album
+  EXPECT_EQ((*find_node(g, "song:" + t1))["expanded"], true);
+  EXPECT_EQ((*find_node(g, "song:" + f1))["expanded"], false);
+  EXPECT_EQ((*find_node(g, "song:" + f1))["degree"], 2);  // the seed and Box/05
+  for (const auto& e : g["edges"]) {
+    if (e["from"] != "song:" + t1 || e["to"] != "song:" + f1) continue;
+    EXPECT_EQ(e["type"], "similar");
+    EXPECT_EQ(e["kind"], "audio_embed");
+    EXPECT_DOUBLE_EQ(e["score"].get<double>(), 0.9);
+    EXPECT_EQ(e["provenance"], "computed");
+    EXPECT_FALSE(e.contains("directed"));
+  }
+
+  // The same album too: the edge between two neighbours (Other/01 and /02) is shown as well.
+  g = s->get(seed + "&similarOtherAlbums=false").body;
+  EXPECT_EQ(g["nodes"].size(), 5u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + t2);
+  EXPECT_EQ(count_edges(g, "similar"), 5u);
+  // k and a lowest score.
+  g = s->get(seed + "&similarK=1").body;
+  ASSERT_EQ(g["nodes"].size(), 2u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + f1);
+  g = s->get(seed + "&similarMinScore=0.85").body;
+  EXPECT_EQ(g["nodes"].size(), 2u);
+
+  // Not asked for: no similar edges.
+  EXPECT_EQ(count_edges(s->get("/ext/graph?seed=song:" + t1).body, "similar"), 0u);
+
+  EXPECT_EQ(s->get(seed + "&similarKind=audio_match").status, 400);
+  EXPECT_EQ(s->get(seed + "&similarMinScore=high").status, 400);
+  EXPECT_EQ(s->get(seed + "&similarK=x").status, 400);
 }

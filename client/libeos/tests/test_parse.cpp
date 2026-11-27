@@ -112,6 +112,92 @@ TEST(Parse, RelationAndTarget) {
   EXPECT_FALSE(r.song);
 }
 
+TEST(Parse, Graph) {
+  auto j = json::parse(R"({
+    "seed": "song:t1", "depth": 2, "truncated": true,
+    "nodes": [
+      {"id": "song:t1", "type": "song", "label": "Main Theme", "distance": 0, "degree": 2, "expanded": true,
+       "song": {"id": "t1", "title": "Main Theme", "compositionId": "c1"}},
+      {"id": "composition:c1", "type": "composition", "label": "Main Theme", "distance": 1, "degree": 3,
+       "expanded": true, "composition": {"id": "c1", "name": "Main Theme", "musicBrainzWorkId": null,
+       "composers": [{"id": "a1", "name": "Sato"}], "provenance": "tag"}},
+      {"id": "title:w1", "type": "title", "label": "Game X", "distance": 1, "degree": 4, "expanded": false,
+       "title": {"id": "w1", "name": "Game X", "sortName": null, "kind": "game", "year": 2021, "provenance": "tag"}},
+      {"id": "artist:a1", "type": "artist", "label": "Sato", "distance": 1, "degree": 466, "expanded": false,
+       "artist": {"id": "a1", "name": "Sato"}},
+      {"id": "album:al1", "type": "album", "label": "Box", "distance": 1, "degree": 5, "expanded": false,
+       "album": {"id": "al1", "name": "Box", "kind": "physical"}}
+    ],
+    "edges": [
+      {"from": "song:t1", "to": "composition:c1", "type": "performance", "arrangementId": "ar1",
+       "arrangementName": null, "arrangementKind": "original", "isOriginal": true, "provenance": "tag"},
+      {"from": "song:t4", "to": "composition:c1", "type": "quote", "directed": true, "relationId": "r1",
+       "subtype": null, "position": 2, "note": "intro", "provenance": "rule", "confidence": 0.75},
+      {"from": "song:t1", "to": "title:w1", "type": "title", "provenance": "llm", "confidence": 0.6},
+      {"from": "song:t1", "to": "artist:a1", "type": "credit", "role": "performer", "subRole": "piano",
+       "provenance": "tag"},
+      {"from": "song:t1", "to": "album:al1", "type": "album", "virtual": false, "provenance": "tag"},
+      {"from": "song:t1", "to": "song:t9", "type": "similar", "kind": "audio_embed", "score": 0.8197,
+       "provenance": "computed"}
+    ]
+  })");
+  Graph g = parse::graph(j);
+  EXPECT_EQ(g.seed, "song:t1");
+  EXPECT_EQ(g.depth, 2);
+  EXPECT_TRUE(g.truncated);
+  ASSERT_EQ(g.nodes.size(), 5u);
+  const auto& seed = g.nodes[0];
+  EXPECT_EQ(seed.type, "song");
+  EXPECT_EQ(seed.distance, 0);
+  EXPECT_TRUE(seed.expanded);
+  ASSERT_TRUE(seed.song);
+  EXPECT_EQ(seed.song->composition_id, "c1");
+  EXPECT_FALSE(seed.composition);
+  ASSERT_TRUE(g.nodes[1].composition);
+  EXPECT_EQ(g.nodes[1].composition->composers[0].name, "Sato");
+  ASSERT_TRUE(g.nodes[2].title);
+  EXPECT_EQ(g.nodes[2].title->year, 2021);
+  EXPECT_FALSE(g.nodes[2].expanded);
+  ASSERT_TRUE(g.nodes[3].artist);
+  EXPECT_EQ(g.nodes[3].artist->name, "Sato");
+  EXPECT_EQ(g.nodes[3].degree, 466);
+  ASSERT_TRUE(g.nodes[4].album);
+  EXPECT_EQ(g.nodes[4].album->name, "Box");
+
+  ASSERT_EQ(g.edges.size(), 6u);
+  const auto& perf = g.edges[0];
+  EXPECT_EQ(perf.type, "performance");
+  EXPECT_FALSE(perf.directed);
+  EXPECT_EQ(perf.arrangement_id, "ar1");
+  EXPECT_FALSE(perf.arrangement_name);
+  EXPECT_EQ(perf.arrangement_kind, "original");
+  EXPECT_TRUE(perf.is_original);
+  EXPECT_FALSE(perf.confidence);
+  const auto& quote = g.edges[1];
+  EXPECT_TRUE(quote.directed);
+  EXPECT_EQ(quote.relation_id, "r1");
+  EXPECT_EQ(quote.position, 2);
+  EXPECT_EQ(quote.note, "intro");
+  EXPECT_DOUBLE_EQ(*quote.confidence, 0.75);
+  EXPECT_EQ(g.edges[2].provenance, "llm");
+  EXPECT_EQ(g.edges[3].role, "performer");
+  EXPECT_EQ(g.edges[3].sub_role, "piano");
+  EXPECT_FALSE(g.edges[4].is_virtual);
+  EXPECT_FALSE(g.edges[4].score);
+  const auto& similar = g.edges[5];
+  EXPECT_EQ(similar.type, "similar");
+  EXPECT_FALSE(similar.directed);
+  EXPECT_EQ(similar.kind, "audio_embed");
+  EXPECT_DOUBLE_EQ(*similar.score, 0.8197);
+  EXPECT_EQ(similar.provenance, "computed");
+
+  // An empty answer and a node type the client does not know yet.
+  auto other = parse::graph(json::parse(R"({"nodes": [{"id": "x:1", "type": "x", "label": "?"}]})"));
+  ASSERT_EQ(other.nodes.size(), 1u);
+  EXPECT_FALSE(other.nodes[0].song);
+  EXPECT_TRUE(other.edges.empty());
+}
+
 TEST(Parse, WrongTypeThrows) {
   EXPECT_THROW(parse::song(json::parse(R"({"id": 5})")), json::exception);
 }

@@ -45,7 +45,7 @@
 
 | メソッドとパス | 返すもの |
 | --- | --- |
-| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features` |
+| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features`（グラフがあれば `graph` を含みます） |
 | `GET /ext/scan` | `scanning`、`phase`、`count`、`folderCount`、`last`（直近のスキャンの件数） |
 | `GET /ext/folders` | 全フォルダの平らな一覧（`id`、`name`、`parentId`、`sortOrder`、`albumCount`、`childCount`、`provenance`）。木はクライアントが組みます |
 | `GET /ext/folders/{id}` | `folder`、`children`（直下のフォルダ）、`albums` |
@@ -59,6 +59,7 @@
 | `GET /ext/songs/{id}` | 曲 |
 | `GET /ext/songs/{id}/versions` | 下記 |
 | `GET /ext/search?q=` | 下記 |
+| `GET /ext/graph?seed=` | 下記。関連する曲のグラフ（節と辺） |
 | `GET /ext/suggestions?status=&rule=&method=` | 候補の一覧。`status` の既定は `pending`。確信度の高い順 |
 | `GET /ext/suggestions/{id}` | 候補 |
 | `GET /ext/preferred` | 自分の「好きなバージョン」の一覧 |
@@ -87,6 +88,74 @@
 ### `GET /ext/search?q=`
 
 `compositions`（`{"composition", "songs"}`、全編曲の曲）、`titles`（`{"title", "songCount", "songs"}`、先頭 10 曲）、`songs`、`albums`（仮想も含む）、`artists` を返します。楽曲のまとまりに入った曲は `songs` に重ねて出しません。`limit` で各種類の件数を変えられます（既定 20）。
+
+### `GET /ext/graph?seed=`
+
+ひとつの曲（または楽曲・作品・人物・アルバム）を中心に、つながりを節（`nodes`）と辺（`edges`）で返します。関連する曲をグラフで描くための API です。座標は返しません。配置はクライアントが決めます。
+
+- まとまりは節にします。同じ楽曲の曲どうしは直接つながず、楽曲の節につなぎます。作品、人物、アルバムも同じです。
+- 曲どうし（または曲と楽曲）を直接つなぐのは「関係」（`medley` など）と、`include=similar` のときの「類似」だけです。
+
+| パラメータ | 意味 | 既定 |
+| --- | --- | --- |
+| `seed` | 中心の節。`種類:ID` の形。種類は `song`（`track` も可）・`composition`・`title`・`artist`・`album` | 必須 |
+| `depth` | たどる段数（0〜4）。曲 → 楽曲 → 別の曲で 2 段です | 2 |
+| `include` | たどる辺の種類（`,` 区切り）：`composition`・`relation`・`title`・`artist`・`album`・`similar` | `composition,relation,title` |
+| `roles` | `artist` の辺を役割で絞ります（例：`composer,arranger`） | 全部 |
+| `limit` | 節の上限（1〜1000）。中心に近い節から残します | 200 |
+| `fanout` | 中心以外の節は、相手がこの数より多いと開きません（1〜1000） | 50 |
+| `includeEstimated` | `false` で推定の紐付けを除きます | `true` |
+| `similarKind` | `similar` の辺に使う類似度の種類（`GET /ext/similarity`）。保存されていない種類は 400 です | `audio_embed` |
+| `similarK` | `similar` の辺を、1 曲あたり点数の高い順に何本まで出すか（1〜50） | 5 |
+| `similarMinScore` | これより点数の低い `similar` の辺は出しません | なし |
+| `similarOtherAlbums` | `false` で、同じアルバム（物理）の曲も `similar` の相手にします | `true` |
+
+```json
+{
+  "seed": "song:t1",
+  "depth": 2,
+  "nodes": [
+    { "id": "song:t1", "type": "song", "label": "Main Theme", "distance": 0, "degree": 2, "expanded": true,
+      "song": { … } },
+    { "id": "composition:c1", "type": "composition", "label": "Main Theme", "distance": 1, "degree": 3,
+      "expanded": true, "composition": { … } },
+    { "id": "artist:a1", "type": "artist", "label": "Sato", "distance": 1, "degree": 466, "expanded": false,
+      "artist": { "id": "a1", "name": "Sato" } }
+  ],
+  "edges": [
+    { "from": "song:t1", "to": "composition:c1", "type": "performance", "arrangementId": "ar1",
+      "arrangementName": null, "arrangementKind": "original", "isOriginal": true, "provenance": "tag" },
+    { "from": "song:t4", "to": "composition:c1", "type": "quote", "directed": true, "relationId": "r1",
+      "subtype": null, "position": null, "note": null, "provenance": "manual" }
+  ],
+  "truncated": false
+}
+```
+
+節：
+
+- `id` は `種類:ID`。そのまま次の呼び出しの `seed` に使えます。
+- 種類と同じ名前の項目に本体が入ります（`song` は曲、`album` はアルバム、`composition`・`title` は読み取り API と同じ形、`artist` は `id` と `name`）。
+- `distance`：中心からの段数。節は中心に近い順に並びます。
+- `degree`：その節の相手の数（`include` の範囲で数えます）。
+- `expanded`：相手が全部この応答に入っていれば `true`。`false` の節は、その節を `seed` にして呼ぶと続きが取れます。
+
+辺：
+
+| `type` | 向き（`from` → `to`） | 追加の項目 |
+| --- | --- | --- |
+| `performance` | 曲 → 楽曲 | `arrangementId`、`arrangementName`、`arrangementKind`、`isOriginal`（原曲なら `true`）。編曲は節にせず、ここに入れます |
+| `medley`・`quote`・`derivative`・`cover`・`related` | 関係の `from` → `to` | `directed: true`、`relationId`、`subtype`、`position`、`note` |
+| `title` | 曲 → 作品 | |
+| `credit` | 曲・楽曲 → 人物 | `role`（`composer`・`arranger`・`artist` など）、`subRole`（楽器）。役割ごとに 1 本 |
+| `album` | 曲 → アルバム | `virtual`（仮想アルバムなら `true`） |
+| `similar` | 曲 — 曲（向きなし。`from` は相手を選んだ側） | `kind`、`score`（尺度は種類ごと）。`provenance` は `computed` |
+
+- どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` も付きます。
+- 辺は、応答に入った節どうしのものを全部返します（端の節どうしの辺も含みます）。
+- `truncated`：`limit` に達して、たどるのをやめたときに `true`。
+- 人物やアルバムは相手が数百になるので、`include` に書いたときだけたどります。書いても、`fanout` を超える節は開かずに `degree` だけ返します。
+- `similar` の辺は**中心の曲からだけ**たどります（どの曲にも `similarK` 本あるので、段を重ねると節が増えすぎるため）。ほかの経路で入った曲どうしの `similar` の辺は、ふつうの辺と同じく返します。そのため `include=similar` では、中心以外の曲はたいてい `expanded: false` になります。その曲を `seed` にすると、その曲の近い曲が出ます。
 
 ## 編集（管理者）
 
@@ -150,7 +219,7 @@
 
   | 規則 | 条件 |
   | --- | --- |
-  | `same_composition` | 楽曲が決まっていない曲どうしで、基本の曲名（派生の印と末尾の括弧書きを除いたもの）と作曲者が一致する |
+  | `same_composition` | 楽曲が決まっていない曲どうしで、基本の曲名（派生の印と末尾の括弧書きを除いたもの）と作曲者が一致する。全部の曲が 30 秒以下のとき（ジングル）は、確信度を 0.4 に下げ、`evidence` に `{"reason": "jingle_length", "longestMs", "note"}` を付ける |
   | `performance_variant` | 同じ楽曲・基本の曲名・編曲者なのに、編曲が分かれている |
   | `derivative` | 「(TV Size)」「Instrumental」「Off Vocal」「Remix」などの曲と、同じアルバム（なければ同じ作品）の元の曲 |
   | `medley` | 曲名を `〜`・`～`・` / `・` - ` で分けた部分が別の曲名や楽曲名と一致する。末尾の「～…～」などは区切る前に除き、曲名に「メドレー」「Medley」があれば 2 つ以上、なければ 3 つ以上の一致が要る |
@@ -211,6 +280,38 @@
   - 照合できなかった数を `unmatched` で返します。
   - 2 回読み込んでも重複しません。
 - 応答：`{"imported": {"titles": N, …}, "unmatched": {"tracks": N, "albums": N}}`
+- 類似度（下記）は書き出しに入りません。ツールで作り直します。
+
+## 類似度（管理者、`audio-embed` などのツール用）
+
+曲どうしの類似度を、種類（`kind`）ごとに丸ごと入れ替えて保存します。音が似ているかどうかのような目安で、楽曲や関係のような「事実」ではありません。候補の承認の流れには乗らず、出どころも持ちません。設計は [similarity.md](similarity.md) にあります。
+
+| メソッドとパス | 説明 |
+| --- | --- |
+| `GET /ext/similarity` | 種類の一覧（`items`、`total`） |
+| `PUT /ext/similarity/{kind}` | その種類を丸ごと入れ替えます（1 トランザクション） |
+| `DELETE /ext/similarity/{kind}` | その種類を消します（204。ない種類は 404） |
+
+`PUT` の本文：
+
+```json
+{
+  "model": "laion/larger_clap_music",
+  "params": { "windows": 6, "centered": true, "k": 50 },
+  "trackCount": 1823,
+  "pairs": [["<曲 ID>", "<曲 ID>", 0.8197], ...]
+}
+```
+
+- `kind` は `a-z`・`0-9`・`_` の 1〜64 文字です。
+- `model` は必須です。`params` は任意のオブジェクトで、そのまま一覧に返します。`trackCount` は計算に入った曲の数で、省くと組のある曲の数になります。
+- 組の向きは問いません。同じ組が 2 回あれば点数の高いほうを残し、同じ曲どうしの組は捨てます。
+- 知らない曲 ID を含む組は飛ばし、`skipped` に数を返します。
+- 点数の尺度は種類ごとに決まります。種類をまたいで比べません。
+- 本文の上限は 8 MB です（曲ごと 50 件で、1823 曲が約 4 MB）。
+- 応答：`{"kind", "pairCount", "skipped", "trackCount"}`
+- 一覧の 1 件：`{"kind", "model", "params", "trackCount", "pairCount", "createdAt"}`（`createdAt` は UNIX ミリ秒）
+- 曲が削除される（`purge`）と、その曲の組も消えます。`missing` の曲の組は残ります。
 
 ## WebSocket
 

@@ -47,8 +47,14 @@ std::string strip(std::string title, const std::vector<std::regex>& patterns) {
   return trim(title);
 }
 
+// same_composition groups whose songs are all this short are jingles ("Game Over",
+// "Stage Clear"): sharing a name and a composer says little about being one piece.
+constexpr int64_t kJingleMs = 30'000;
+constexpr double kJingleScore = 0.4;
+
 struct Track {
   std::string id, title, album_id, base, arrangement, composition;
+  int64_t duration_ms = 0;
   std::set<std::string> composers, arrangers, performers, titles;
   std::optional<std::string> derivative;
 };
@@ -103,11 +109,11 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
   std::unordered_map<std::string, size_t> by_id;
   {
     auto st = c.prepare(
-        "SELECT t.id, t.title, t.album_id, COALESCE(e.arrangement_id, ''), COALESCE(a.composition_id, '') "
-        "FROM track t LEFT JOIN track_arrangement_eff e ON e.track_id = t.id "
+        "SELECT t.id, t.title, t.album_id, COALESCE(e.arrangement_id, ''), COALESCE(a.composition_id, ''), "
+        "t.duration_ms FROM track t LEFT JOIN track_arrangement_eff e ON e.track_id = t.id "
         "LEFT JOIN arrangement a ON a.id = e.arrangement_id WHERE t.missing = 0 ORDER BY t.id");
     while (st.step()) {
-      Track t{st.text(0), st.text(1), st.text(2), {}, st.text(3), st.text(4), {}, {}, {}, {}, {}};
+      Track t{st.text(0), st.text(1), st.text(2), {}, st.text(3), st.text(4), st.int64(5), {}, {}, {}, {}, {}};
       t.base = normalize(strip(t.title, patterns));
       t.derivative = derivative_subtype(t.title, cfg);
       by_id[t.id] = tracks.size();
@@ -141,6 +147,8 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
   struct Candidate {
     std::string rule, fingerprint;
     json payload;
+    double score = 1.0;
+    std::optional<std::string> evidence;
   };
   std::vector<Candidate> found;
 
@@ -165,7 +173,18 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
                                                            members.front()->composers.end())},
                     {"tracks", ids}};
     if (existing) payload["compositionId"] = *existing;
-    found.push_back({"same_composition", fp("same_composition|" + key), payload});
+    Candidate cand{"same_composition", fp("same_composition|" + key), payload};
+    if (std::all_of(members.begin(), members.end(), [](auto* m) { return m->duration_ms <= kJingleMs; })) {
+      int64_t longest = 0;
+      for (auto* m : members) longest = std::max(longest, m->duration_ms);
+      cand.score = kJingleScore;
+      cand.evidence = json{{"reason", "jingle_length"},
+                           {"longestMs", longest},
+                           {"note", "Every song is 30 s or shorter. Short cues of different games often share a name "
+                                    "and a composer credit; listen before accepting."}}
+                          .dump();
+    }
+    found.push_back(std::move(cand));
   }
 
   // -- performance_variant
@@ -276,13 +295,13 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
     auto status = c.scalar_text("SELECT status FROM suggestion WHERE fingerprint = ?", f.fingerprint);
     if (!status) {
       c.run(
-          "INSERT INTO suggestion (id, rule, method, fingerprint, payload, score, status, created_at) "
-          "VALUES (?, ?, 'rule', ?, ?, 1.0, 'pending', ?)",
-          ids::random_id(), f.rule, f.fingerprint, f.payload.dump(), now);
+          "INSERT INTO suggestion (id, rule, method, evidence, fingerprint, payload, score, status, created_at) "
+          "VALUES (?, ?, 'rule', ?, ?, ?, ?, 'pending', ?)",
+          ids::random_id(), f.rule, f.evidence, f.fingerprint, f.payload.dump(), f.score, now);
       ++added;
     } else if (*status == "pending" || *status == "stale") {
-      c.run("UPDATE suggestion SET payload = ?, status = 'pending' WHERE fingerprint = ?", f.payload.dump(),
-            f.fingerprint);
+      c.run("UPDATE suggestion SET payload = ?, score = ?, evidence = ?, status = 'pending' WHERE fingerprint = ?",
+            f.payload.dump(), f.score, f.evidence, f.fingerprint);
     }
   }
   // Pending rule suggestions that were not produced again no longer apply.

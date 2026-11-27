@@ -17,6 +17,10 @@ Api api({.base_url = "http://nas:4540", .api_key = login.key, .client_name = "kl
 for (const Album& a : api.album_list({.type = "newest", .size = 50})) { … }
 Album album = api.album(id);                       // 曲つき
 std::string url = api.stream_url(album.songs[0].id);  // mpv に IPC で渡す
+
+// 関連する曲のグラフ（節と辺）。開いていない節（expanded == false）は、その id を seed にして呼び直す
+Graph g = api.graph({.seed = "song:" + album.songs[0].id});
+Graph more = api.graph({.seed = g.nodes[1].id, .depth = 1});
 ```
 
 - 呼び出しはサーバーの応答を待ちます。UI スレッドではなく作業用のスレッドから呼んでください。

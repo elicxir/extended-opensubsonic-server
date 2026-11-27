@@ -353,6 +353,117 @@ TEST_F(Live, ExtCompositionsVersionsSearchPreferred) {
   EXPECT_TRUE(api.preferred().empty());
 }
 
+TEST_F(Live, Graph) {
+  auto opening = find_song("Opening");
+  auto node = [](const Graph& g, const std::string& type, const std::string& label) -> const GraphNode* {
+    for (const auto& n : g.nodes)
+      if (n.type == type && n.label == label) return &n;
+    return nullptr;
+  };
+
+  // Two steps: the composition and the title, then the songs they hold.
+  auto g = api.graph({.seed = "song:" + opening.id});
+  EXPECT_EQ(g.seed, "song:" + opening.id);
+  EXPECT_EQ(g.depth, 2);
+  EXPECT_FALSE(g.truncated);
+  ASSERT_EQ(g.nodes.size(), 5u);  // Opening, Main Theme, Game Z, the piano version, Battle
+  EXPECT_EQ(g.nodes[0].id, "song:" + opening.id);
+  EXPECT_EQ(g.nodes[0].distance, 0);
+  ASSERT_TRUE(g.nodes[0].song);
+  EXPECT_EQ(g.nodes[0].song->title, "Opening");
+  auto* comp = node(g, "composition", "Main Theme");
+  ASSERT_NE(comp, nullptr);
+  ASSERT_TRUE(comp->composition);
+  EXPECT_EQ(comp->distance, 1);
+  EXPECT_EQ(comp->degree, 2);
+  EXPECT_TRUE(comp->expanded);
+  auto* game = node(g, "title", "Game Z");
+  ASSERT_NE(game, nullptr);
+  ASSERT_TRUE(game->title);
+  auto* piano = node(g, "song", "メインテーマ (Piano)");
+  ASSERT_NE(piano, nullptr);
+  EXPECT_EQ(piano->distance, 2);
+  ASSERT_EQ(g.edges.size(), 4u);
+  int performances = 0;
+  for (const auto& e : g.edges) {
+    if (e.type != "performance") continue;
+    ++performances;
+    EXPECT_EQ(e.to, comp->id);
+    EXPECT_EQ(e.provenance, "tag");
+    if (e.from == piano->id) {
+      EXPECT_FALSE(e.is_original);
+      EXPECT_EQ(e.arrangement_name, "Piano Ver.");
+    } else {
+      EXPECT_TRUE(e.is_original);
+    }
+  }
+  EXPECT_EQ(performances, 2);
+
+  // One step, composers only: the composer node, not opened.
+  auto people = api.graph({.seed = g.nodes[0].id, .depth = 1, .include = {"artist"}, .roles = {"composer"}});
+  auto* carol = node(people, "artist", "Carol");
+  ASSERT_NE(carol, nullptr);
+  ASSERT_TRUE(carol->artist);
+  for (const auto& e : people.edges) {
+    EXPECT_EQ(e.type, "credit");
+    EXPECT_EQ(e.role, "composer");
+  }
+
+  // A small limit cuts the walk.
+  EXPECT_TRUE(api.graph({.seed = "song:" + opening.id, .limit = 2}).truncated);
+
+  try {
+    api.graph({.seed = "song:missing"});
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_TRUE(e.not_found());
+  }
+  try {
+    api.graph({.seed = "nonsense"});
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_EQ(e.http_status(), 400);
+  }
+}
+
+TEST_F(Live, GraphSimilar) {
+  auto opening = find_song("Opening"), battle = find_song("Battle"), piano = find_song("メインテーマ (Piano)");
+  const GraphQuery q{.seed = "song:" + opening.id, .include = {"similar"}};
+  try {
+    api.graph(q);  // nothing stored yet
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_EQ(e.http_status(), 400);
+  }
+
+  // Store a similarity through the raw door (what audio-embed does), then read it as edges.
+  api.ext_request("PUT", "/ext/similarity/audio_embed", {},
+                  R"({"model": "live-test", "pairs": [[")" + opening.id + R"(", ")" + battle.id + R"(", 0.9], [")" +
+                      opening.id + R"(", ")" + piano.id + R"(", 0.8]]})");
+  auto g = api.graph(q);
+  ASSERT_EQ(g.nodes.size(), 2u);  // Battle is on the same album
+  EXPECT_EQ(g.nodes[1].id, "song:" + piano.id);
+  ASSERT_EQ(g.edges.size(), 1u);
+  EXPECT_EQ(g.edges[0].type, "similar");
+  EXPECT_EQ(g.edges[0].kind, "audio_embed");
+  EXPECT_DOUBLE_EQ(*g.edges[0].score, 0.8);
+
+  auto all = q;
+  all.similar_other_albums = false;
+  g = api.graph(all);
+  ASSERT_EQ(g.nodes.size(), 3u);
+  EXPECT_EQ(g.nodes[1].id, "song:" + battle.id);  // best first
+  all.similar_min_score = 0.85;
+  EXPECT_EQ(api.graph(all).nodes.size(), 2u);
+  all.similar_min_score.reset();
+  all.similar_k = 1;
+  EXPECT_EQ(api.graph(all).nodes.size(), 2u);
+  all.similar_kind = "audio_match";
+  EXPECT_THROW(api.graph(all), Error);
+
+  EXPECT_EQ(api.ext_request("DELETE", "/ext/similarity/audio_embed"), "");
+}
+
 TEST_F(Live, ApiKeysAndRawRequests) {
   auto created = api.create_api_key("second device");
   EXPECT_FALSE(created.key.empty());
