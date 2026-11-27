@@ -68,6 +68,24 @@ Config parse_config(std::string_view text) {
     cfg.log_level = (*server)["log_level"].value_or(cfg.log_level);
   }
 
+  if (auto http = root["http"].as_table()) {
+    warn_unknown(*http, "http", {"threads", "trusted_proxies"});
+    cfg.http_threads = static_cast<int>((*http)["threads"].value_or(int64_t{cfg.http_threads}));
+    if ((*http)["trusted_proxies"])
+      cfg.trusted_proxies = string_array((*http)["trusted_proxies"].node(), "http.trusted_proxies");
+  }
+
+  if (auto art = root["artwork"].as_table()) {
+    if ((*art)["album_files"])
+      cfg.artwork_album_files = string_array((*art)["album_files"].node(), "artwork.album_files");
+    cfg.artwork_cache_max_mb =
+        static_cast<int>((*art)["cache_max_mb"].value_or(int64_t{cfg.artwork_cache_max_mb}));
+  }
+
+  if (auto sub = root["subsonic"].as_table()) {
+    cfg.ignored_articles = (*sub)["ignored_articles"].value_or(cfg.ignored_articles);
+  }
+
   if (auto libs = root["library"].as_array()) {
     for (const auto& el : *libs) {
       auto t = el.as_table();

@@ -6,8 +6,13 @@ collections (works, compositions, arrangements, relations, virtual albums).
 - Requirements: https://claude.ai/artifact/YSMz59jZw56DzgCaJiT9Rt
 - Detailed design: https://claude.ai/artifact/NzgE1GsRzzUFN6cHbja7ce
 
-Status: **M1** — database, scanner (standard tags, persistent IDs, move detection) and
-`eos-admin`. The HTTP API arrives in M2.
+Status: **M2** — the OpenSubsonic API on port 4540 (`/rest/*`: browsing, lists, search3,
+stars/ratings/scrobbles, playlists, play queue, stream/download with Range, cover art),
+on top of M1's database, scanner and `eos-admin`. Transcoding and the custom data
+(works, folders, virtual albums) arrive in M3.
+
+Clients log in with a per-device API key (`eos-admin apikey create <user> <device>`) or
+with username and password (token auth). Plain `p=` passwords are off by default.
 
 ## Run with Docker
 
