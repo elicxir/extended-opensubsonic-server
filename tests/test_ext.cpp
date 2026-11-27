@@ -726,3 +726,58 @@ TEST_F(ExtTest, SimilarityIsForAdministratorsAndChecksItsInput) {
   EXPECT_EQ(r.status, 200);
   EXPECT_EQ(r.body["pairCount"], 0);
 }
+
+TEST_F(ExtTest, GraphSimilarFromTheSeedOnly) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       t5 = s->track("Box/05.flac"), f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  const auto seed = "/ext/graph?seed=song:" + t1 + "&include=similar";
+  // No similarity stored yet: asking for it is an error, not an empty graph.
+  EXPECT_EQ(s->get(seed).status, 400);
+
+  json body = {{"model", "test-model"},
+               {"pairs", json::array({json::array({t1, f1, 0.9}), json::array({t1, f2, 0.8}),
+                                      json::array({t1, t2, 0.95}), json::array({t1, t4, 0.3}),
+                                      json::array({f1, f2, 0.7}), json::array({f1, t5, 0.85})})}};
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_embed", body).status, 200);
+
+  // Default: the 5 best from other albums (Box/02 and Box/04 share the seed's album). The
+  // neighbours are not walked further: Box/05 is only similar to Other/01.
+  auto r = s->get(seed + "&depth=3", &s->user_key);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  auto g = r.body;
+  EXPECT_EQ(g["nodes"].size(), 3u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + f1);  // best first
+  EXPECT_EQ(g["nodes"][2]["id"], "song:" + f2);
+  EXPECT_EQ(find_node(g, "song:" + t5), nullptr);
+  EXPECT_EQ(count_edges(g, "similar"), 2u);  // Other/01 and /02 share an album
+  EXPECT_EQ((*find_node(g, "song:" + t1))["expanded"], true);
+  EXPECT_EQ((*find_node(g, "song:" + f1))["expanded"], false);
+  EXPECT_EQ((*find_node(g, "song:" + f1))["degree"], 2);  // the seed and Box/05
+  for (const auto& e : g["edges"]) {
+    if (e["from"] != "song:" + t1 || e["to"] != "song:" + f1) continue;
+    EXPECT_EQ(e["type"], "similar");
+    EXPECT_EQ(e["kind"], "audio_embed");
+    EXPECT_DOUBLE_EQ(e["score"].get<double>(), 0.9);
+    EXPECT_EQ(e["provenance"], "computed");
+    EXPECT_FALSE(e.contains("directed"));
+  }
+
+  // The same album too: the edge between two neighbours (Other/01 and /02) is shown as well.
+  g = s->get(seed + "&similarOtherAlbums=false").body;
+  EXPECT_EQ(g["nodes"].size(), 5u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + t2);
+  EXPECT_EQ(count_edges(g, "similar"), 5u);
+  // k and a lowest score.
+  g = s->get(seed + "&similarK=1").body;
+  ASSERT_EQ(g["nodes"].size(), 2u);
+  EXPECT_EQ(g["nodes"][1]["id"], "song:" + f1);
+  g = s->get(seed + "&similarMinScore=0.85").body;
+  EXPECT_EQ(g["nodes"].size(), 2u);
+
+  // Not asked for: no similar edges.
+  EXPECT_EQ(count_edges(s->get("/ext/graph?seed=song:" + t1).body, "similar"), 0u);
+
+  EXPECT_EQ(s->get(seed + "&similarKind=audio_match").status, 400);
+  EXPECT_EQ(s->get(seed + "&similarMinScore=high").status, 400);
+  EXPECT_EQ(s->get(seed + "&similarK=x").status, 400);
+}

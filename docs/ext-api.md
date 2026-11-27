@@ -94,17 +94,21 @@
 ひとつの曲（または楽曲・作品・人物・アルバム）を中心に、つながりを節（`nodes`）と辺（`edges`）で返します。関連する曲をグラフで描くための API です。座標は返しません。配置はクライアントが決めます。
 
 - まとまりは節にします。同じ楽曲の曲どうしは直接つながず、楽曲の節につなぎます。作品、人物、アルバムも同じです。
-- 曲どうし（または曲と楽曲）を直接つなぐのは「関係」（`medley` など）だけです。
+- 曲どうし（または曲と楽曲）を直接つなぐのは「関係」（`medley` など）と、`include=similar` のときの「類似」だけです。
 
 | パラメータ | 意味 | 既定 |
 | --- | --- | --- |
 | `seed` | 中心の節。`種類:ID` の形。種類は `song`（`track` も可）・`composition`・`title`・`artist`・`album` | 必須 |
 | `depth` | たどる段数（0〜4）。曲 → 楽曲 → 別の曲で 2 段です | 2 |
-| `include` | たどる辺の種類（`,` 区切り）：`composition`・`relation`・`title`・`artist`・`album` | `composition,relation,title` |
+| `include` | たどる辺の種類（`,` 区切り）：`composition`・`relation`・`title`・`artist`・`album`・`similar` | `composition,relation,title` |
 | `roles` | `artist` の辺を役割で絞ります（例：`composer,arranger`） | 全部 |
 | `limit` | 節の上限（1〜1000）。中心に近い節から残します | 200 |
 | `fanout` | 中心以外の節は、相手がこの数より多いと開きません（1〜1000） | 50 |
 | `includeEstimated` | `false` で推定の紐付けを除きます | `true` |
+| `similarKind` | `similar` の辺に使う類似度の種類（`GET /ext/similarity`）。保存されていない種類は 400 です | `audio_embed` |
+| `similarK` | `similar` の辺を、1 曲あたり点数の高い順に何本まで出すか（1〜50） | 5 |
+| `similarMinScore` | これより点数の低い `similar` の辺は出しません | なし |
+| `similarOtherAlbums` | `false` で、同じアルバム（物理）の曲も `similar` の相手にします | `true` |
 
 ```json
 {
@@ -145,11 +149,13 @@
 | `title` | 曲 → 作品 | |
 | `credit` | 曲・楽曲 → 人物 | `role`（`composer`・`arranger`・`artist` など）、`subRole`（楽器）。役割ごとに 1 本 |
 | `album` | 曲 → アルバム | `virtual`（仮想アルバムなら `true`） |
+| `similar` | 曲 — 曲（向きなし。`from` は相手を選んだ側） | `kind`、`score`（尺度は種類ごと）。`provenance` は `computed` |
 
 - どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` も付きます。
 - 辺は、応答に入った節どうしのものを全部返します（端の節どうしの辺も含みます）。
 - `truncated`：`limit` に達して、たどるのをやめたときに `true`。
 - 人物やアルバムは相手が数百になるので、`include` に書いたときだけたどります。書いても、`fanout` を超える節は開かずに `degree` だけ返します。
+- `similar` の辺は**中心の曲からだけ**たどります（どの曲にも `similarK` 本あるので、段を重ねると節が増えすぎるため）。ほかの経路で入った曲どうしの `similar` の辺は、ふつうの辺と同じく返します。そのため `include=similar` では、中心以外の曲はたいてい `expanded: false` になります。その曲を `seed` にすると、その曲の近い曲が出ます。
 
 ## 編集（管理者）
 

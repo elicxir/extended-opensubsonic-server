@@ -2,7 +2,9 @@
 // songs as a graph.
 //
 // Groups are nodes, not cliques: the songs of a composition all point at the composition
-// node instead of at each other. Only `relation` rows join two songs directly.
+// node instead of at each other. Only `relation` rows join two songs directly, and, with
+// include=similar, the computed similarity (docs/similarity.md), which is followed from
+// the seed only.
 #include <algorithm>
 #include <deque>
 #include <set>
@@ -18,13 +20,22 @@ namespace {
 
 // Which kinds of edges to follow (?include=).
 struct Include {
-  bool composition = false, relation = false, title = false, artist = false, album = false;
+  bool composition = false, relation = false, title = false, artist = false, album = false, similar = false;
+};
+
+// ?similarKind= &similarK= &similarMinScore= &similarOtherAlbums=
+struct Similar {
+  std::string kind = "audio_embed";
+  int64_t k = 5;
+  double min_score = -1e300;
+  bool other_albums = true;  // leave out songs of the same (physical) album
 };
 
 struct Edge {
   std::string key;  // the same edge found from either end has the same key
   std::string from, to;
   json j;
+  bool seed_only = false;  // walked from the seed only (similar): every song has k of them
 };
 
 std::string node_id(std::string_view type, const std::string& id) {
@@ -44,8 +55,8 @@ json prov_fields(int64_t source, const std::optional<std::string>& method, const
 
 class Graph {
  public:
-  Graph(ExtCtx& c, Include inc, std::set<std::string> roles)
-      : c_(c), db_(c.db), inc_(inc), roles_(std::move(roles)), min_(c.min_source()) {}
+  Graph(ExtCtx& c, Include inc, std::set<std::string> roles, Similar sim)
+      : c_(c), db_(c.db), inc_(inc), roles_(std::move(roles)), sim_(std::move(sim)), min_(c.min_source()) {}
 
   // Every edge touching `node` (cached). Strong kinds first, so that they win the
   // node budget.
@@ -60,6 +71,7 @@ class Graph {
       if (inc_.title) titles(out, "tt.track_id = ?1", id);
       if (inc_.artist) credits(out, "p.entity_type = 'track' AND p.entity_id = ?1", id);
       if (inc_.album) albums_of(out, "t.id = ?1", "at.track_id = ?1", id);
+      if (inc_.similar) similar(out, id);
     } else if (type == "composition") {
       if (inc_.composition) performances(out, "a.composition_id = ?1", id);
       if (inc_.relation) relations(out, "composition", id);
@@ -75,10 +87,31 @@ class Graph {
   }
 
  private:
-  void add(std::vector<Edge>& out, std::string key, std::string from, std::string to, json j) {
+  void add(std::vector<Edge>& out, std::string key, std::string from, std::string to, json j, bool seed_only = false) {
     json e = {{"from", from}, {"to", to}};
     e.update(j);
-    out.push_back({std::move(key), std::move(from), std::move(to), std::move(e)});
+    out.push_back({std::move(key), std::move(from), std::move(to), std::move(e), seed_only});
+  }
+
+  // song -- song: the song's k most similar songs of one kind, best first. The table holds
+  // each song's top K as unordered pairs with symmetric scores, so the rows touching the
+  // song, ordered by score, are its own top list (docs/similarity.md).
+  void similar(std::vector<Edge>& out, const std::string& id) {
+    auto st = db_.prepare(
+        "SELECT s.other, s.score FROM ("
+        "  SELECT track_b AS other, score FROM similarity WHERE track_a = ?1 AND kind = ?2 "
+        "  UNION ALL SELECT track_a, score FROM similarity WHERE track_b = ?1 AND kind = ?2) s "
+        "JOIN track t ON t.id = s.other AND t.missing = 0 "
+        "WHERE s.score >= ?3 AND (?4 = 0 OR t.album_id <> (SELECT album_id FROM track WHERE id = ?1)) "
+        "ORDER BY s.score DESC, s.other LIMIT ?5");
+    st.bind_all(id, sim_.kind, sim_.min_score, sim_.other_albums ? 1 : 0, sim_.k);
+    while (st.step()) {
+      auto other = st.text(0);
+      auto from = node_id("song", id), to = node_id("song", other);
+      auto key = "similar|" + sim_.kind + "|" + std::min(id, other) + "|" + std::max(id, other);
+      add(out, std::move(key), from, to,
+          {{"type", "similar"}, {"kind", sim_.kind}, {"score", st.real(1)}, {"provenance", "computed"}}, true);
+    }
   }
 
   // song -> composition, through the song's effective arrangement.
@@ -211,6 +244,7 @@ class Graph {
   db::Connection& db_;
   Include inc_;
   std::set<std::string> roles_;
+  Similar sim_;
   int min_;
   std::unordered_map<std::string, std::vector<Edge>> cache_;
 };
@@ -237,7 +271,8 @@ Include parse_include(ExtCtx& c) {
     else if (k == "title") inc.title = true;
     else if (k == "artist") inc.artist = true;
     else if (k == "album") inc.album = true;
-    else throw bad_request("include: unknown kind '" + k + "' (composition, relation, title, artist, album)");
+    else if (k == "similar") inc.similar = true;
+    else throw bad_request("include: unknown kind '" + k + "' (composition, relation, title, artist, album, similar)");
   }
   return inc;
 }
@@ -261,6 +296,25 @@ std::string parse_seed(ExtCtx& c) {
   return type + ":" + id;
 }
 
+Similar parse_similar(ExtCtx& c, bool wanted) {
+  Similar s;
+  if (auto k = c.query("similarKind")) s.kind = *k;
+  s.k = int_param(c, "similarK", s.k, 1, 50);
+  if (auto v = c.query("similarMinScore")) {
+    try {
+      size_t used = 0;
+      s.min_score = std::stod(*v, &used);
+      if (used != v->size()) throw std::invalid_argument("trailing");
+    } catch (const std::exception&) {
+      throw bad_request("similarMinScore must be a number");
+    }
+  }
+  if (auto v = c.query("similarOtherAlbums")) s.other_albums = !(*v == "false" || *v == "0");
+  if (wanted && !c.db.scalar_int("SELECT 1 FROM similarity_set WHERE kind = ?", s.kind))
+    throw bad_request("similarKind: no similarity of kind '" + s.kind + "' (see GET /ext/similarity)");
+  return s;
+}
+
 const std::string& other_end(const Edge& e, const std::string& node) { return e.from == node ? e.to : e.from; }
 
 Reply graph(ExtCtx& c) {
@@ -270,7 +324,8 @@ Reply graph(ExtCtx& c) {
   const auto fanout = static_cast<size_t>(int_param(c, "fanout", 50, 1, 1000));
   std::set<std::string> roles;
   for (const auto& r : split_any(c.query("roles").value_or(""), {","})) roles.insert(trim(r));
-  Graph g(c, parse_include(c), std::move(roles));
+  const auto inc = parse_include(c);
+  Graph g(c, inc, std::move(roles), parse_similar(c, inc.similar));
 
   // Breadth first from the seed, so that when the node budget runs out the nearest
   // nodes are the ones kept. A node other than the seed with more than `fanout`
@@ -287,8 +342,10 @@ Reply graph(ExtCtx& c) {
     const auto& edges = g.edges_of(node);
     std::vector<std::string> next;
     std::unordered_set<std::string> seen;
-    for (const auto& e : edges)
+    for (const auto& e : edges) {
+      if (e.seed_only && node != seed) continue;
       if (const auto& o = other_end(e, node); o != node && seen.insert(o).second) next.push_back(o);
+    }
     if (node != seed && next.size() > fanout) continue;
     for (auto& o : next) {
       if (dist.count(o)) continue;

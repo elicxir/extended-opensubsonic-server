@@ -169,16 +169,16 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 
 ## まだ決めていないこと
 
-- **類似グラフの API。** 案は、同じ `/ext/graph` に `include=similar` を足し、節は曲だけ、辺は上位 k 件で `score` 付き。応答の形を関連グラフと同じにして、クライアントの描画を共通にする。
+- ~~**類似グラフの API。**~~ 実装済み（2026-11-28）。`/ext/graph` の `include=similar`。節は曲だけ、辺は上位 k 件で `score` 付き。応答の形は関連グラフと同じ。
 - ~~**類似度の保存。**~~ 実装済み（2026-11-28）。設計と測った値は `docs/similarity.md`、API は `docs/ext-api.md` の「類似度」。
-- **同じアルバムの扱い。** 類似では同じアルバムの曲が上位を占めやすい。除くか、減点するか。
+- ~~**同じアルバムの扱い。**~~ 読むときに選ぶ形にした（`similarOtherAlbums`、既定で除く）。減点はしていない。
 - **未承認の候補をグラフに点線で出すか**（`includePending`）。入れていない。
 - **`audio-embed` の曲の一覧の取り方。** 今は DB を直接読む。`audio-match` と同じく API 経由にするかは、使えると分かってから。
 
 ## 残っている作業
 
 - ~~`client/libeos` に `graph()` を足す~~（済。`Api::graph(GraphQuery)` が `Graph`（節と辺）を返す）。kleulir はそれを使う。
-- 類似グラフ：~~質の確認~~（済。上の「質を見た結果」）→ ~~保存の形~~（済。`/ext/similarity`、`audio_embed.py store`）→ `/ext/graph` の `include=similar` → テストとドキュメント。
+- 類似グラフ：~~質の確認~~（済。上の「質を見た結果」）→ ~~保存の形~~（済。`/ext/similarity`、`audio_embed.py store`）→ ~~`/ext/graph` の `include=similar`~~（済。中心の曲からだけたどる。同じアルバムは既定で除く）。
   - デスクトップの `data/gpu-run/eos.db` には、`audio_embed` の 72,225 組が入っている（K = 50）。
 - 承認済みのサンプル DB で `check`（楽曲単位）を回す。ベクトルは MD5 で引くので、計算し直さなくてよい。
 
