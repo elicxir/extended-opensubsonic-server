@@ -177,7 +177,7 @@ data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.
 
 ## 残っている作業
 
-- `client/libeos` に `graph()` を足す。libeos は別のブランチ（`claude/libeos-cpp-api-client-5bb0f9`）にある。kleulir はそれを使う。
+- ~~`client/libeos` に `graph()` を足す~~（済。ブランチ `claude/libeos-graph`。`main` を取り込んだうえに足した）。`Api::graph(GraphQuery)` が `Graph`（節と辺）を返す。kleulir はそれを使う。
 - 類似グラフ：~~質の確認~~（済。上の「質を見た結果」）→ 保存の形 → API → テストとドキュメント。
 - 承認済みのサンプル DB で `check`（楽曲単位）を回す。ベクトルは MD5 で引くので、計算し直さなくてよい。
 

@@ -175,6 +175,22 @@ ExtSearchResult Api::ext_search(const std::string& q, int limit) {
   });
 }
 
+Graph Api::graph(const GraphQuery& gq) {
+  auto csv = [](const std::vector<std::string>& v) {
+    std::string out;
+    for (const auto& s : v) out += (out.empty() ? "" : ",") + s;
+    return out;
+  };
+  Query q{{"seed", gq.seed},
+          {"depth", std::to_string(gq.depth)},
+          {"limit", std::to_string(gq.limit)},
+          {"fanout", std::to_string(gq.fanout)}};
+  if (!gq.include.empty()) q.emplace_back("include", csv(gq.include));
+  if (!gq.roles.empty()) q.emplace_back("roles", csv(gq.roles));
+  auto j = impl_->ext_get("/ext/graph", std::move(q));
+  return parsed("/ext/graph", [&] { return parse::graph(j); });
+}
+
 // ---- preferred versions ----
 
 std::vector<Preferred> Api::preferred() {

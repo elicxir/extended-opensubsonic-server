@@ -68,6 +68,19 @@ struct StreamOptions {
   int time_offset = 0;  // seconds; only when the server transcodes
 };
 
+struct GraphQuery {
+  // The centre, as "<type>:<id>": song (or track), composition, title, artist, album.
+  // GraphNode::id can be passed back as is.
+  std::string seed;
+  int depth = 2;  // 0..4; song -> composition -> other song is 2 steps
+  // Kinds of edges to follow: composition, relation, title, artist, album.
+  // Empty: the server default (composition, relation, title).
+  std::vector<std::string> include;
+  std::vector<std::string> roles;  // artist edges only, e.g. {"composer", "arranger"}; empty: all
+  int limit = 200;   // most nodes (1..1000); the nearest are kept
+  int fanout = 50;   // a node (other than the seed) with more neighbours is not opened
+};
+
 using Query = std::vector<std::pair<std::string, std::string>>;
 
 class Api {
@@ -146,6 +159,8 @@ class Api {
   Song ext_song(const std::string& id);
   SongVersions song_versions(const std::string& song_id);
   ExtSearchResult ext_search(const std::string& q, int limit = 20);  // per kind
+  // Related songs as a graph around q.seed (GET /ext/graph). An unknown seed throws not_found.
+  Graph graph(const GraphQuery& q);
 
   // ---- /ext: preferred version of a composition (per user) ----
   std::vector<Preferred> preferred();

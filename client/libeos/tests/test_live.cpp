@@ -353,6 +353,79 @@ TEST_F(Live, ExtCompositionsVersionsSearchPreferred) {
   EXPECT_TRUE(api.preferred().empty());
 }
 
+TEST_F(Live, Graph) {
+  auto opening = find_song("Opening");
+  auto node = [](const Graph& g, const std::string& type, const std::string& label) -> const GraphNode* {
+    for (const auto& n : g.nodes)
+      if (n.type == type && n.label == label) return &n;
+    return nullptr;
+  };
+
+  // Two steps: the composition and the title, then the songs they hold.
+  auto g = api.graph({.seed = "song:" + opening.id});
+  EXPECT_EQ(g.seed, "song:" + opening.id);
+  EXPECT_EQ(g.depth, 2);
+  EXPECT_FALSE(g.truncated);
+  ASSERT_EQ(g.nodes.size(), 5u);  // Opening, Main Theme, Game Z, the piano version, Battle
+  EXPECT_EQ(g.nodes[0].id, "song:" + opening.id);
+  EXPECT_EQ(g.nodes[0].distance, 0);
+  ASSERT_TRUE(g.nodes[0].song);
+  EXPECT_EQ(g.nodes[0].song->title, "Opening");
+  auto* comp = node(g, "composition", "Main Theme");
+  ASSERT_NE(comp, nullptr);
+  ASSERT_TRUE(comp->composition);
+  EXPECT_EQ(comp->distance, 1);
+  EXPECT_EQ(comp->degree, 2);
+  EXPECT_TRUE(comp->expanded);
+  auto* game = node(g, "title", "Game Z");
+  ASSERT_NE(game, nullptr);
+  ASSERT_TRUE(game->title);
+  auto* piano = node(g, "song", "メインテーマ (Piano)");
+  ASSERT_NE(piano, nullptr);
+  EXPECT_EQ(piano->distance, 2);
+  ASSERT_EQ(g.edges.size(), 4u);
+  int performances = 0;
+  for (const auto& e : g.edges) {
+    if (e.type != "performance") continue;
+    ++performances;
+    EXPECT_EQ(e.to, comp->id);
+    EXPECT_EQ(e.provenance, "tag");
+    if (e.from == piano->id) {
+      EXPECT_FALSE(e.is_original);
+      EXPECT_EQ(e.arrangement_name, "Piano Ver.");
+    } else {
+      EXPECT_TRUE(e.is_original);
+    }
+  }
+  EXPECT_EQ(performances, 2);
+
+  // One step, composers only: the composer node, not opened.
+  auto people = api.graph({.seed = g.nodes[0].id, .depth = 1, .include = {"artist"}, .roles = {"composer"}});
+  auto* carol = node(people, "artist", "Carol");
+  ASSERT_NE(carol, nullptr);
+  ASSERT_TRUE(carol->artist);
+  for (const auto& e : people.edges) {
+    EXPECT_EQ(e.type, "credit");
+    EXPECT_EQ(e.role, "composer");
+  }
+
+  // A small limit cuts the walk.
+  EXPECT_TRUE(api.graph({.seed = "song:" + opening.id, .limit = 2}).truncated);
+
+  try {
+    api.graph({.seed = "song:missing"});
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_TRUE(e.not_found());
+  }
+  try {
+    api.graph({.seed = "nonsense"});
+    FAIL();
+  } catch (const Error& e) {
+    EXPECT_EQ(e.http_status(), 400);
+  }
+}
+
 TEST_F(Live, ApiKeysAndRawRequests) {
   auto created = api.create_api_key("second device");
   EXPECT_FALSE(created.key.empty());
