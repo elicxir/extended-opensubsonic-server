@@ -146,7 +146,14 @@
 ```
 
 - `status`：`pending`、`accepted`、`auto_applied`、`rejected`、`stale`（タグや手作業で同じ情報が入って不要になった）。
-- `rule` の規則：`same_composition`、`performance_variant`、`derivative`、`medley`。
+- `rule` の規則（サーバーがスキャンのたびに出すもの）：
+
+  | 規則 | 条件 |
+  | --- | --- |
+  | `same_composition` | 楽曲が決まっていない曲どうしで、基本の曲名（派生の印と末尾の括弧書きを除いたもの）と作曲者が一致する |
+  | `performance_variant` | 同じ楽曲・基本の曲名・編曲者なのに、編曲が分かれている |
+  | `derivative` | 「(TV Size)」「Instrumental」「Off Vocal」「Remix」などの曲と、同じアルバム（なければ同じ作品）の元の曲 |
+  | `medley` | 曲名を `〜`・`～`・` / `・` - ` で分けた部分が別の曲名や楽曲名と一致する。末尾の「～…～」などは区切る前に除き、曲名に「メドレー」「Medley」があれば 2 つ以上、なければ 3 つ以上の一致が要る |
 
 ### `proposal` の種類
 

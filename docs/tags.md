@@ -53,7 +53,7 @@ Vorbis Comment の名前で書きます。MP3（ID3v2）や MP4 のタグは、T
   - 曲の PID：`musicbrainz_trackid|albumid,discnumber,tracknumber,title`
   - アルバムの PID：`musicbrainz_albumid|albumartistid,album,albumversion,releasedate`
   - `|` の左から、全部の値がそろう最初の組を使います。値は正規化してからハッシュします。
-  - 同じアルバムでも、曲ごとに日付が違うと別のアルバムになります（Navidrome と同じ）。
+  - `releasedate` は `RELEASEDATE` タグだけを使います（Navidrome と同じ）。`DATE`（録音年が入ることが多い）が曲ごとに違っても、アルバムは分かれません。`RELEASEDATE` が違うと別のアルバム（再発盤など）になります。
 - 次のときは同じ ID を引き継ぎます。
   1. ファイルを移動した、名前を変えた（同じ PID の曲が消えている）
   2. タグを直してから移動した（FLAC の音声の MD5 が一致する曲がひとつだけ消えている）
