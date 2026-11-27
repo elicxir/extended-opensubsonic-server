@@ -1,5 +1,6 @@
 #include "scanner/track_info.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "core/ids.h"
@@ -105,6 +106,36 @@ std::string genre_id(const std::string& name) {
   return ids::hash_id(ids::join_key({"genre", normalize(name)}));
 }
 
+std::vector<std::string> custom_tag_values(const TagMap& t, const CustomTagConfig& tag) {
+  std::vector<std::string> vals;
+  for (const auto& alias : tag.aliases) {
+    for (const auto& v : all(t, alias.c_str())) {
+      auto pieces = tag.split.empty() ? std::vector<std::string>{v} : split_any(v, tag.split);
+      for (auto& piece : pieces) {
+        if (piece.size() > tag.max_length) piece.resize(tag.max_length);
+        if (std::find(vals.begin(), vals.end(), piece) == vals.end()) vals.push_back(std::move(piece));
+      }
+    }
+  }
+  return vals;
+}
+
+std::string arrangement_kind(const std::string& name) {
+  auto n = normalize(name);
+  auto has = [&](std::initializer_list<const char*> words) {
+    for (auto w : words)
+      if (n.find(w) != std::string::npos) return true;
+    return false;
+  };
+  if (n.empty()) return "original";
+  if (has({"piano", "ぴあの"})) return "piano";
+  if (has({"orchestra", "orchestral", "symphon", "おーけすとら", "交響"})) return "orchestra";
+  if (has({"acoustic", "あこーすてぃっく"})) return "acoustic";
+  if (has({"band", "rock", "ばんど"})) return "band";
+  if (has({"vocal", "ぼーかる", "歌"})) return "vocal";
+  return "other";
+}
+
 std::string content_type_for(const std::string& suffix) {
   if (suffix == "flac") return "audio/flac";
   if (suffix == "mp3") return "audio/mpeg";
@@ -168,19 +199,9 @@ TrackInfo interpret(const RawFile& raw, const std::string& rel_path, int64_t siz
     ti.performance_kind = kind;
   ti.recorded_date = first(t, {"RECORDINGDATE"});
 
-  for (const auto& [name, tag] : cfg.tags) {
-    std::vector<std::string> vals;
-    for (const auto& alias : tag.aliases) {
-      for (const auto& v : all(t, alias.c_str())) {
-        auto pieces = tag.split.empty() ? std::vector<std::string>{v} : split_any(v, tag.split);
-        for (auto& piece : pieces) {
-          if (piece.size() > tag.max_length) piece.resize(tag.max_length);
-          vals.push_back(std::move(piece));
-        }
-      }
-    }
-    if (!vals.empty()) ti.custom[name] = std::move(vals);
-  }
+  for (const auto& [name, tag] : cfg.tags)
+    if (auto vals = custom_tag_values(t, tag); !vals.empty()) ti.custom[name] = std::move(vals);
+  ti.arrangement = first(t, {"ARRANGEMENT"});
 
   ti.album = first(t, {"ALBUM"});
   if (ti.album.empty()) ti.album = kUnknownAlbum;

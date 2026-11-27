@@ -84,6 +84,24 @@ Config parse_config(std::string_view text) {
 
   if (auto sub = root["subsonic"].as_table()) {
     cfg.ignored_articles = (*sub)["ignored_articles"].value_or(cfg.ignored_articles);
+    auto va = (*sub)["virtual_albums"].value_or(std::string("hide"));
+    if (va != "hide" && va != "show") throw ConfigError("subsonic.virtual_albums must be \"hide\" or \"show\"");
+    cfg.show_virtual_albums = va == "show";
+  }
+
+  if (auto tc = root["transcode"].as_table()) {
+    warn_unknown(*tc, "transcode", {"ffmpeg", "default_format", "max_concurrent"});
+    cfg.transcode_ffmpeg = (*tc)["ffmpeg"].value_or(cfg.transcode_ffmpeg);
+    cfg.transcode_default_format = (*tc)["default_format"].value_or(cfg.transcode_default_format);
+    cfg.transcode_max_concurrent =
+        static_cast<int>((*tc)["max_concurrent"].value_or(int64_t{cfg.transcode_max_concurrent}));
+  }
+
+  if (auto sg = root["suggest"].as_table()) {
+    if ((*sg)["derivative_patterns"])
+      cfg.derivative_patterns = string_array((*sg)["derivative_patterns"].node(), "suggest.derivative_patterns");
+    if ((*sg)["medley_separators"])
+      cfg.medley_separators = string_array((*sg)["medley_separators"].node(), "suggest.medley_separators");
   }
 
   if (auto libs = root["library"].as_array()) {

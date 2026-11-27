@@ -20,6 +20,7 @@ struct ScanStats {
   int64_t missing = 0;    // tracks newly marked missing
   int64_t unchanged = 0;
   int64_t purged = 0;     // missing tracks deleted after the grace period
+  int64_t suggestions = 0;  // new rule-based suggestions
   std::vector<std::string> errors;
 };
 

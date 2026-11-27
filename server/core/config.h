@@ -66,6 +66,19 @@ struct Config {
 
   // [subsonic]
   std::string ignored_articles = "The El La Los Las Le Les";
+  bool show_virtual_albums = false;  // virtual_albums = "show" | "hide"
+
+  // [transcode]
+  std::string transcode_ffmpeg = "ffmpeg";
+  std::string transcode_default_format = "opus";
+  int transcode_max_concurrent = 4;
+
+  // [suggest]
+  std::vector<std::string> derivative_patterns = {
+      R"(\(?\s*TV\s*Size\s*\)?)", R"(\(?\s*(TV|Short)\s*(Ver\.?|Version|Edit)\s*\)?)",
+      R"(\(?\s*Instrumental\s*\)?)", R"(\(?\s*Off\s*Vocal\s*\)?)", R"(\(?\s*Karaoke\s*\)?)",
+      R"(\(?\s*[^()]*Remix\s*\)?)"};
+  std::vector<std::string> medley_separators = {"〜", "～", " / ", " - "};
 
   std::filesystem::path db_path() const { return data_dir / "eos.db"; }
   std::filesystem::path cache_dir() const { return data_dir / "cache"; }

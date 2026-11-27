@@ -22,7 +22,7 @@ void add_system_handlers(HandlerTable& t) {
 
   t.add("getOpenSubsonicExtensions", [](Ctx&, Node& root) {
     std::vector<Node> exts;
-    for (const char* name : {"apiKeyAuthentication", "formPost", "indexBasedQueue"}) {
+    for (const char* name : {"apiKeyAuthentication", "formPost", "indexBasedQueue", "transcodeOffset"}) {
       Node e("openSubsonicExtensions");
       e.set("name", name).scalars("versions", {Value(int64_t{1})});
       exts.push_back(std::move(e));

@@ -17,14 +17,16 @@
 #include "core/strings.h"
 #include "db/database.h"
 #include "scanner/tag_reader.h"
+#include "scanner/derived.h"
 #include "scanner/track_info.h"
+#include "search/index.h"
+#include "suggest/rules.h"
 
 namespace eos::scanner {
 namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kSourceTag = 2;
 constexpr size_t kBatchSize = 200;
 
 struct Existing {
@@ -60,29 +62,6 @@ int64_t mtime_ms_of(const struct stat& st) {
 std::string dir_of(const std::string& rel) {
   auto pos = rel.rfind('/');
   return pos == std::string::npos ? std::string() : rel.substr(0, pos);
-}
-
-void upsert_artist(db::Connection& c, const Person& p) {
-  auto id = artist_id(p.name);
-  c.run(
-      "INSERT INTO artist (id, name, sort_name, name_norm, mbz_artist_id) VALUES (?, ?, ?, ?, ?) "
-      "ON CONFLICT(id) DO UPDATE SET name = excluded.name, "
-      "sort_name = COALESCE(excluded.sort_name, artist.sort_name), "
-      "mbz_artist_id = COALESCE(excluded.mbz_artist_id, artist.mbz_artist_id)",
-      id, p.name, p.sort_name.empty() ? std::optional<std::string>() : p.sort_name, normalize(p.name),
-      p.mbid.empty() ? std::optional<std::string>() : p.mbid);
-}
-
-void insert_participants(db::Connection& c, const char* entity_type, const std::string& entity_id,
-                         const char* role, const std::vector<Person>& people) {
-  int pos = 0;
-  for (const auto& p : people) {
-    upsert_artist(c, p);
-    c.run(
-        "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, "
-        "position, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        entity_type, entity_id, artist_id(p.name), role, p.sub_role, pos++, kSourceTag);
-  }
 }
 
 // Manual values win over tags (design: 情報の出どころ). Applied before writing.
@@ -216,6 +195,15 @@ ScanStats Scanner::scan(bool full) {
   }
   count_ = 0;
   folders_ = 0;
+  // A migration can ask for one full rescan (new data is derived from existing tags).
+  if (writer_.run([](db::Connection& c) {
+        bool required = c.scalar_text("SELECT value FROM setting WHERE key = 'rescan_required'").has_value();
+        c.run("DELETE FROM setting WHERE key = 'rescan_required'");
+        return required;
+      })) {
+    if (!full) log::info("scan: full rescan requested by a database upgrade");
+    full = true;
+  }
   auto started = db::now_ms();
   auto run_id = writer_.run([&](db::Connection& c) {
     c.run("INSERT INTO scan_run (kind, started_at) VALUES (?, ?)", full ? "full" : "quick", started);
@@ -234,6 +222,7 @@ ScanStats Scanner::scan(bool full) {
       total.missing += s.missing;
       total.unchanged += s.unchanged;
       total.purged += s.purged;
+      total.suggestions += s.suggestions;
       total.errors.insert(total.errors.end(), s.errors.begin(), s.errors.end());
     } catch (const std::exception& e) {
       log::error("scan: library {} failed: {}", lib.path.string(), e.what());
@@ -531,6 +520,7 @@ ScanStats Scanner::scan_library(const LibraryConfig& lib, bool full, int64_t run
         const auto& r = results[i];
         if (albums_written.insert(r.album_id).second) write_album(c, lib_id, r, now);
         write_track(c, lib_id, r, now);
+        write_track_custom(c, cfg_, r.info, r.id, lib_id, now);
       }
       tx.commit();
     });
@@ -580,7 +570,10 @@ ScanStats Scanner::scan_library(const LibraryConfig& lib, bool full, int64_t run
     c.exec(
         "DELETE FROM participant WHERE entity_type = 'track' "
         "  AND entity_id NOT IN (SELECT id FROM track);"
-        "DELETE FROM album WHERE kind = 'physical' AND id NOT IN (SELECT album_id FROM track);"
+        "DELETE FROM album WHERE kind = 'physical' AND id NOT IN (SELECT album_id FROM track);");
+    update_album_folders(c, cfg_, touched_albums);
+    finish_custom(c, now);
+    c.exec(
         "DELETE FROM participant WHERE entity_type = 'album' "
         "  AND entity_id NOT IN (SELECT id FROM album);"
         "DELETE FROM artist WHERE id NOT IN (SELECT artist_id FROM participant);"
@@ -589,6 +582,26 @@ ScanStats Scanner::scan_library(const LibraryConfig& lib, bool full, int64_t run
     tx.commit();
     return purged;
   });
+
+  // -- search index and suggestions, only when something changed
+  const bool changed = !results.empty() || !newly_missing.empty() || stats.purged > 0;
+  const bool index_empty = !rc.scalar_int("SELECT 1 FROM search_index LIMIT 1") &&
+                           rc.scalar_int("SELECT 1 FROM track LIMIT 1");
+  if (changed || index_empty || full) {
+    set_phase("indexing");
+    writer_.run([&](db::Connection& c) {
+      db::Transaction tx(c);
+      search::rebuild_index(c);
+      tx.commit();
+    });
+    set_phase("suggesting");
+    stats.suggestions = writer_.run([&](db::Connection& c) {
+      db::Transaction tx(c);
+      auto n = suggest::run_rules(c, cfg_);
+      tx.commit();
+      return n;
+    });
+  }
   return stats;
 }
 

@@ -54,7 +54,7 @@ TEST(Db, WriteQueueRunsJobsInOrderAndPropagatesErrors) {
     }));
   }
   for (auto& f : futs) f.get();
-  EXPECT_EQ(q.run([](db::Connection& c) { return *c.scalar_int("SELECT COUNT(*) FROM setting"); }), 4);
+  EXPECT_EQ(q.run([](db::Connection& c) { return *c.scalar_int("SELECT COUNT(*) FROM setting WHERE key LIKE 'k%'"); }), 4);
   auto bad = q.submit([](db::Connection& c) { c.exec("INSERT INTO nope VALUES (1)"); });
   EXPECT_THROW(bad.get(), db::DbError);
   // The queue keeps working after a failed job.
@@ -63,5 +63,5 @@ TEST(Db, WriteQueueRunsJobsInOrderAndPropagatesErrors) {
   // Readers see committed data while the writer is busy.
   db::ReadPool pool(path, 2);
   auto lease = pool.acquire();
-  EXPECT_EQ(lease->scalar_int("SELECT COUNT(*) FROM setting"), 4);
+  EXPECT_EQ(lease->scalar_int("SELECT COUNT(*) FROM setting WHERE key LIKE 'k%'"), 4);
 }

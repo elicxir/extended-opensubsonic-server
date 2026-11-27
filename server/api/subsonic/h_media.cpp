@@ -1,5 +1,4 @@
-// stream, download, getCoverArt. M2 always sends the original file; transcoding
-// (format / maxBitRate / timeOffset) arrives in M3.
+// stream, download, getCoverArt.
 #include "api/subsonic/router.h"
 #include "core/strings.h"
 #include "media/artwork.h"
@@ -37,7 +36,19 @@ void add_media_handlers(HandlerTable& t) {
   t.add_raw("stream", [](Ctx& c) {
     std::string type;
     auto file = require_track_file(c, type);
-    return file_response(c.req, file, type);
+    auto id = c.require("id");
+    auto st = c.db.prepare("SELECT suffix, COALESCE(bit_rate, 0) FROM track WHERE id = ?");
+    st.bind(1, id);
+    st.step();
+    auto plan = media::plan_transcode(c.svc.cfg, st.text(0), static_cast<int>(st.int64(1)), c.param("format"),
+                                      c.opt_int("maxBitRate"), c.opt_int("timeOffset").value_or(0));
+    if (!plan) return file_response(c.req, file, type);  // timeOffset needs no work: clients use Range
+    auto source = c.svc.transcoder.start(*plan, file);
+    if (!source) throw SubsonicError(err::generic, "Too many transcodes running; try again shortly");
+    Response r;
+    r.content_type = plan->content_type;
+    r.stream = std::move(source);
+    return r;
   });
 
   t.add_raw("download", [](Ctx& c) {

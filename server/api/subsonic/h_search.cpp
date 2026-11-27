@@ -1,77 +1,15 @@
-// search3. M2 matches with LIKE on normalised text (eos_norm); FTS5 replaces it in M3.
+// search3 on the FTS5 trigram index (design: 検索). An empty query lists everything.
 #include "api/subsonic/builders.h"
 #include "api/subsonic/router.h"
-#include "core/normalize.h"
-#include "core/strings.h"
+#include "search/index.h"
 
 namespace eos::api {
-namespace {
-
-// Splits the query into words and normalises each. Quotes and '*' wildcards that
-// some clients send are dropped by the normalisation.
-std::vector<std::string> query_terms(const std::string& q) {
-  std::vector<std::string> out;
-  for (const auto& w : split_any(q, {" ", "\t", "　"}))
-    if (auto n = normalize(w); !n.empty()) out.push_back(std::move(n));
-  return out;
-}
-
-// WHERE fragment: every term must appear in the concatenation of `fields`, and the
-// ORDER BY rank: exact match on the first field, then prefix, then the rest.
-struct Match {
-  std::string where;
-  std::string rank;
-  std::vector<std::string> binds;
-};
-
-Match build_match(const std::vector<std::string>& terms, const std::vector<std::string>& fields) {
-  Match m;
-  if (terms.empty()) {
-    m.where = "1";
-    m.rank = "NULL";  // a bare integer in ORDER BY would mean a column number
-    return m;
-  }
-  std::string hay;
-  for (size_t i = 0; i < fields.size(); ++i) {
-    if (i) hay += " || ' ' || ";
-    hay += "eos_norm(COALESCE(" + fields[i] + ", ''))";
-  }
-  for (size_t i = 0; i < terms.size(); ++i) {
-    if (i) m.where += " AND ";
-    m.where += "instr(" + hay + ", ?) > 0";
-    m.binds.push_back(terms[i]);
-  }
-  std::string whole;
-  for (const auto& t : terms) whole += t;
-  const std::string primary = "eos_norm(COALESCE(" + fields[0] + ", ''))";
-  m.rank = "CASE WHEN " + primary + " = ? THEN 0 WHEN substr(" + primary +
-           ", 1, length(?)) = ? THEN 1 WHEN instr(" + primary + ", ?) > 0 THEN 2 ELSE 3 END";
-  for (int i = 0; i < 4; ++i) m.binds.push_back(whole);
-  return m;
-}
-
-std::vector<std::string> run_search(db::Connection& db, const std::string& select_from,
-                                    const std::string& filter, const Match& m,
-                                    const std::string& order_tail, int64_t count, int64_t offset) {
-  std::string sql = select_from + " WHERE " + filter + " AND (" + m.where + ") ORDER BY " + m.rank +
-                    ", " + order_tail + " LIMIT ? OFFSET ?";
-  auto st = db.prepare(sql);
-  int i = 0;
-  // where binds, then rank binds (both are in m.binds in that order)
-  for (const auto& b : m.binds) st.bind(++i, b);
-  st.bind(++i, count);
-  st.bind(++i, offset);
-  std::vector<std::string> ids;
-  while (st.step()) ids.push_back(st.text(0));
-  return ids;
-}
-
-}  // namespace
 
 void add_search_handlers(HandlerTable& t) {
   t.add("search3", [](Ctx& c, Node& root) {
-    auto terms = query_terms(c.param("query").value_or(""));
-    Loader loader(c.db, c.user.id);
+    const bool show_virtual = c.svc.cfg.show_virtual_albums;
+    auto terms = search::query_terms(c.param("query").value_or(""));
+    Loader loader(c.db, c.user.id, show_virtual);
     Node n("searchResult3");
 
     auto artist_count = c.int_param("artistCount", 20, 0, 500);
@@ -79,34 +17,49 @@ void add_search_handlers(HandlerTable& t) {
     // An empty query lists everything; clients that mirror the library page through
     // songs this way, so allow large pages.
     auto song_count = c.int_param("songCount", 20, 0, terms.empty() ? 5000 : 500);
+    auto artist_offset = c.int_param("artistOffset", 0, 0, INT64_MAX);
+    auto album_offset = c.int_param("albumOffset", 0, 0, INT64_MAX);
+    auto song_offset = c.int_param("songOffset", 0, 0, INT64_MAX);
+
+    const std::string album_artist_filter =
+        "EXISTS (SELECT 1 FROM participant p JOIN album al ON al.id = p.entity_id "
+        "WHERE p.entity_type = 'album' AND p.role = 'albumartist' AND p.artist_id = e.id AND " +
+        visible_album_sql(show_virtual) + ")";
+
+    if (terms.empty()) {
+      if (artist_count > 0)
+        n.list("artist", loader.artists(loader.ids(
+                             "SELECT e.id FROM artist e WHERE " + album_artist_filter +
+                                 " ORDER BY COALESCE(e.sort_name, e.name) COLLATE NOCASE, e.id LIMIT ? OFFSET ?",
+                             artist_count, artist_offset)));
+      if (album_count > 0)
+        n.list("album", loader.albums(loader.ids(
+                            "SELECT al.id FROM album al WHERE " + visible_album_sql(show_virtual) +
+                                " ORDER BY COALESCE(al.sort_name, al.name) COLLATE NOCASE, al.id LIMIT ? OFFSET ?",
+                            album_count, album_offset)));
+      if (song_count > 0)
+        n.list("song", loader.songs(loader.ids(
+                           "SELECT t.id FROM track t WHERE t.missing = 0 ORDER BY t.album_id, "
+                           "COALESCE(t.disc_number, 0), COALESCE(t.track_number, 0), t.path LIMIT ? OFFSET ?",
+                           song_count, song_offset)));
+      root.child(std::move(n));
+      return;
+    }
 
     if (artist_count > 0) {
-      auto m = build_match(terms, {"ar.name", "ar.sort_name"});
-      auto ids = run_search(
-          c.db, "SELECT ar.id FROM artist ar",
-          "EXISTS (SELECT 1 FROM participant p JOIN album al ON al.id = p.entity_id "
-          "WHERE p.entity_type = 'album' AND p.role = 'albumartist' AND p.artist_id = ar.id "
-          "AND al.missing = 0 AND al.kind = 'physical')",
-          m, "COALESCE(ar.sort_name, ar.name) COLLATE NOCASE", artist_count,
-          c.int_param("artistOffset", 0, 0, INT64_MAX));
-      n.list("artist", loader.artists(ids));
+      search::Target target{"artist", "JOIN artist e ON e.id = search_index.ref_id", album_artist_filter, "artist",
+                            "COALESCE(e.sort_name, e.name)"};
+      n.list("artist", loader.artists(search::find(c.db, target, terms, c.user.id, artist_count, artist_offset)));
     }
     if (album_count > 0) {
-      auto m = build_match(terms, {"al.name", "al.sort_name", "al.display_artist"});
-      auto ids = run_search(c.db, "SELECT al.id FROM album al", "al.missing = 0 AND al.kind = 'physical'",
-                            m, "COALESCE(al.sort_name, al.name) COLLATE NOCASE, al.id", album_count,
-                            c.int_param("albumOffset", 0, 0, INT64_MAX));
-      n.list("album", loader.albums(ids));
+      search::Target target{"album", "JOIN album e ON e.id = search_index.ref_id",
+                            visible_album_sql(show_virtual, "e"), "album", "COALESCE(e.sort_name, e.name)"};
+      n.list("album", loader.albums(search::find(c.db, target, terms, c.user.id, album_count, album_offset)));
     }
     if (song_count > 0) {
-      auto m = build_match(terms, {"t.title", "t.sort_title", "t.subtitle", "al.name", "t.display_artist"});
-      auto ids = run_search(c.db, "SELECT t.id FROM track t JOIN album al ON al.id = t.album_id",
-                            "t.missing = 0", m,
-                            terms.empty() ? "t.album_id, COALESCE(t.disc_number, 0), "
-                                            "COALESCE(t.track_number, 0), t.path"
-                                          : "COALESCE(t.sort_title, t.title) COLLATE NOCASE, t.id",
-                            song_count, c.int_param("songOffset", 0, 0, INT64_MAX));
-      n.list("song", loader.songs(ids));
+      search::Target target{"track", "JOIN track e ON e.id = search_index.ref_id", "e.missing = 0", "track",
+                            "COALESCE(e.sort_title, e.title)"};
+      n.list("song", loader.songs(search::find(c.db, target, terms, c.user.id, song_count, song_offset)));
     }
     root.child(std::move(n));
   });

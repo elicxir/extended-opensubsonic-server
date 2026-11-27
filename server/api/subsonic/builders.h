@@ -13,6 +13,10 @@ namespace eos::api {
 // JSON array text for binding id lists: `... IN (SELECT value FROM json_each(?))`.
 std::string json_ids(const std::vector<std::string>& ids);
 
+// SQL condition for albums the OpenSubsonic API shows: virtual albums only when
+// subsonic.virtual_albums = "show".
+std::string visible_album_sql(bool show_virtual, const std::string& alias = "al");
+
 std::string album_cover_id(const std::string& album_id, int64_t updated_ms);
 std::string track_cover_id(const std::string& track_id, int64_t updated_ms);
 
@@ -21,7 +25,8 @@ std::string track_cover_id(const std::string& track_id, int64_t updated_ms);
 // albums are skipped too.
 class Loader {
  public:
-  Loader(db::Connection& db, int64_t user_id) : db_(db), user_id_(user_id) {}
+  Loader(db::Connection& db, int64_t user_id, bool show_virtual = false)
+      : db_(db), user_id_(user_id), show_virtual_(show_virtual) {}
 
   std::vector<Node> songs(const std::vector<std::string>& ids, const std::string& elem = "song");
   std::vector<Node> albums(const std::vector<std::string>& ids, const std::string& elem = "album");
@@ -31,7 +36,8 @@ class Loader {
   std::optional<Node> album(const std::string& id, const std::string& elem = "album");
   std::optional<Node> artist(const std::string& id, const std::string& elem = "artist");
 
-  // Track ids of an album in disc / track / path order.
+  // Track ids of an album in disc / track / path order. For a virtual album, its
+  // member tracks in the album's own order.
   std::vector<std::string> album_track_ids(const std::string& album_id);
   // Album ids where the artist is an album artist, newest first.
   std::vector<std::string> artist_album_ids(const std::string& artist_id);
@@ -49,6 +55,7 @@ class Loader {
  private:
   db::Connection& db_;
   int64_t user_id_;
+  bool show_virtual_;
 };
 
 }  // namespace eos::api
