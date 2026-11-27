@@ -6,10 +6,18 @@ collections (works, compositions, arrangements, relations, virtual albums).
 - Requirements: https://claude.ai/artifact/YSMz59jZw56DzgCaJiT9Rt
 - Detailed design: https://claude.ai/artifact/NzgE1GsRzzUFN6cHbja7ce
 
-Status: **M2** — the OpenSubsonic API on port 4540 (`/rest/*`: browsing, lists, search3,
-stars/ratings/scrobbles, playlists, play queue, stream/download with Range, cover art),
-on top of M1's database, scanner and `eos-admin`. Transcoding and the custom data
-(works, folders, virtual albums) arrive in M3.
+Status: **M3** — on top of M2's OpenSubsonic API:
+
+- transcoding with ffmpeg (`format=opus|mp3`, `maxBitRate`, `timeOffset`)
+- data from custom tags: works (`COLLECTION_WORK`), folders (`COLLECTION`, album level,
+  `/` for nesting), virtual albums (`COLLECTION_ALBUM`), compositions and arrangements
+  (`WORK` / `MUSICBRAINZ_WORKID`, `ARRANGEMENT`, `ARRANGER`)
+- rule-based suggestions (same composition, performance variant, derivative, medley),
+  stored for review; accepting them comes with the `/ext` API in M4
+- `search3` on an FTS5 trigram index (Japanese partial matches, readings from sort tags)
+- `getIndexes` / `getMusicDirectory` browse the virtual folders
+
+Virtual albums stay out of `/rest` album lists unless `[subsonic] virtual_albums = "show"`.
 
 Clients log in with a per-device API key (`eos-admin apikey create <user> <device>`) or
 with username and password (token auth). Plain `p=` passwords are off by default.

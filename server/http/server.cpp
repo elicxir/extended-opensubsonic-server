@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "core/log.h"
+#include "media/transcode.h"
 #include "core/strings.h"
 
 namespace eos::http {
@@ -36,7 +37,18 @@ api::Request to_request(const drogon::HttpRequestPtr& req) {
 
 drogon::HttpResponsePtr to_drogon(const api::Response& r) {
   drogon::HttpResponsePtr resp;
-  if (r.file) {
+  if (r.stream) {
+    auto source = r.stream;
+    resp = drogon::HttpResponse::newAsyncStreamResponse([source](drogon::ResponseStreamPtr out) {
+      // Read the producer on its own thread; send() fails once the client is gone,
+      // which makes the source stop (and kill ffmpeg).
+      std::thread([source, out = std::move(out)]() mutable {
+        source->run([&](const char* data, size_t n) { return out->send(std::string(data, n)); });
+        out->close();
+      }).detach();
+    });
+    resp->setContentTypeString(r.content_type);
+  } else if (r.file) {
     bool partial = r.status == 206;
     resp = drogon::HttpResponse::newFileResponse(r.file->string(), static_cast<size_t>(r.offset),
                                                  static_cast<size_t>(r.length), partial, "",

@@ -3,10 +3,15 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace eos::media {
+class StreamSource;
+}
 
 namespace eos::api {
 
@@ -35,6 +40,9 @@ struct Response {
   std::optional<std::filesystem::path> file;
   int64_t offset = 0;
   int64_t length = 0;
+
+  // A generated body (transcoding), sent chunked as it is produced.
+  std::shared_ptr<media::StreamSource> stream;
 };
 
 std::string url_decode(std::string_view s, bool plus_is_space = true);

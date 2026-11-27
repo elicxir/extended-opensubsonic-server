@@ -83,7 +83,7 @@ void write_entries(db::Connection& w, const std::string& playlist_id, const std:
 void add_full_playlist(Ctx& c, Node& root, const std::string& id) {
   auto p = visible_playlist(c, id);
   auto n = playlist_node(p);
-  Loader loader(c.db, c.user.id);
+  Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
   n.list("entry", loader.songs(entries(c.db, id), "entry"));
   root.child(std::move(n));
 }

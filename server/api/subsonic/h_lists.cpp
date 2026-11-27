@@ -5,7 +5,7 @@
 namespace eos::api {
 namespace {
 
-constexpr const char* kVisibleAlbum = "al.missing = 0 AND al.kind = 'physical'";
+
 
 }  // namespace
 
@@ -14,11 +14,11 @@ void add_list_handlers(HandlerTable& t) {
     auto type = c.require("type");
     auto size = c.int_param("size", 10, 0, 500);
     auto offset = c.int_param("offset", 0, 0, INT64_MAX);
-    Loader loader(c.db, c.user.id);
+    Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
     const std::string base =
         std::string("SELECT al.id FROM album al LEFT JOIN annotation an ON an.user_id = ?1 "
                     "AND an.item_type = 'album' AND an.item_id = al.id WHERE ") +
-        kVisibleAlbum;
+        visible_album_sql(c.svc.cfg.show_virtual_albums);
     const std::string page = " LIMIT ?2 OFFSET ?3";
     std::vector<std::string> ids;
     auto by = [&](const std::string& where_order) {
@@ -72,7 +72,7 @@ void add_list_handlers(HandlerTable& t) {
     if (from) sql += " AND t.year >= ?3";
     if (to) sql += " AND t.year <= ?4";
     sql += " ORDER BY random() LIMIT ?1";
-    Loader loader(c.db, c.user.id);
+    Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
     std::vector<std::string> ids;
     {
       auto st = c.db.prepare(sql);
@@ -88,7 +88,7 @@ void add_list_handlers(HandlerTable& t) {
   });
 
   t.add("getStarred2", [](Ctx& c, Node& root) {
-    Loader loader(c.db, c.user.id);
+    Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
     auto starred = [&](const char* type) {
       return loader.ids(
           "SELECT item_id FROM annotation WHERE user_id = ? AND item_type = ? "

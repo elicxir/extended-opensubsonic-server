@@ -44,6 +44,7 @@ struct TrackInfo {
   std::string mbz_recording_id, mbz_track_id, work, mbz_work_id;
   std::optional<std::string> performance_kind;
   std::string recorded_date;
+  std::string arrangement;  // ARRANGEMENT tag
   std::map<std::string, std::vector<std::string>> custom;  // config tag name -> values
 
   // album
@@ -75,5 +76,12 @@ std::string artist_id(const std::string& name);
 std::string genre_id(const std::string& name);
 
 std::string content_type_for(const std::string& suffix);
+
+// Values of a custom tag (all aliases, split and truncated as configured).
+std::vector<std::string> custom_tag_values(const std::map<std::string, std::vector<std::string>>& tags,
+                                           const CustomTagConfig& tag);
+
+// Guesses an arrangement kind from its name ("Piano Ver." -> "piano").
+std::string arrangement_kind(const std::string& name);
 
 }  // namespace eos::scanner

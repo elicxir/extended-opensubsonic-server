@@ -85,6 +85,10 @@ std::optional<Node> item_date(const char* elem, const std::optional<std::string>
 
 std::string json_ids(const std::vector<std::string>& ids) { return nlohmann::json(ids).dump(); }
 
+std::string visible_album_sql(bool show_virtual, const std::string& a) {
+  return show_virtual ? a + ".missing = 0" : a + ".missing = 0 AND " + a + ".kind = 'physical'";
+}
+
 std::string album_cover_id(const std::string& album_id, int64_t updated_ms) {
   return std::format("al-{}_{}", album_id, updated_ms / 1000);
 }
@@ -241,7 +245,7 @@ std::vector<Node> Loader::artists(const std::vector<std::string>& ids, const std
       "SELECT ar.id, ar.name, ar.sort_name, ar.mbz_artist_id, "
       "  (SELECT COUNT(DISTINCT p.entity_id) FROM participant p JOIN album al ON al.id = p.entity_id "
       "   WHERE p.entity_type = 'album' AND p.role = 'albumartist' AND p.artist_id = ar.id "
-      "     AND al.missing = 0 AND al.kind = 'physical'), "
+      "     AND " + visible_album_sql(show_virtual_) + "), "
       "  an.starred_at, an.rating "
       "FROM json_each(?1) j JOIN artist ar ON ar.id = j.value "
       "LEFT JOIN annotation an ON an.user_id = ?2 AND an.item_type = 'artist' AND an.item_id = ar.id "
@@ -276,6 +280,16 @@ std::optional<Node> Loader::artist(const std::string& id, const std::string& ele
 }
 
 std::vector<std::string> Loader::album_track_ids(const std::string& album_id) {
+  if (db_.scalar_text("SELECT kind FROM album WHERE id = ?", album_id) == "virtual") {
+    return ids(
+        "SELECT t.id FROM album_track at JOIN track t ON t.id = at.track_id "
+        "WHERE at.album_id = ?1 AND at.excluded = 0 AND t.missing = 0 AND NOT EXISTS ("
+        "  SELECT 1 FROM album_track x WHERE x.album_id = at.album_id AND x.track_id = at.track_id "
+        "  AND x.excluded = 1) "
+        "GROUP BY t.id ORDER BY COALESCE(MAX(at.disc_number), t.disc_number, 0), "
+        "COALESCE(MAX(at.track_number), t.track_number, 0), t.album_id, t.path",
+        album_id);
+  }
   return ids(
       "SELECT id FROM track WHERE album_id = ? AND missing = 0 "
       "ORDER BY COALESCE(disc_number, 0), COALESCE(track_number, 0), path",
@@ -286,7 +300,7 @@ std::vector<std::string> Loader::artist_album_ids(const std::string& artist_id) 
   return ids(
       "SELECT al.id FROM participant p JOIN album al ON al.id = p.entity_id "
       "WHERE p.entity_type = 'album' AND p.role = 'albumartist' AND p.artist_id = ? "
-      "AND al.missing = 0 AND al.kind = 'physical' "
+      "AND " + visible_album_sql(show_virtual_) + " "
       "GROUP BY al.id ORDER BY COALESCE(al.year, 0) DESC, al.name",
       artist_id);
 }

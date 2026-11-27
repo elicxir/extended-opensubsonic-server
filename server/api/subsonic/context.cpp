@@ -16,7 +16,8 @@ Services::Services(const Config& c, db::ReadPool& r, db::WriteQueue& w, scanner:
       secret_key(std::move(key)),
       trusted_proxies(c.trusted_proxies),
       rate_limit_exempt(c.rate_limit_exempt),
-      artwork(c) {}
+      artwork(c),
+      transcoder(c) {}
 
 Services::~Services() {
   if (scan_thread_.joinable()) scan_thread_.join();

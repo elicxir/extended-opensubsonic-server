@@ -42,7 +42,8 @@ add_custom_command(
           "-DFILES=${EOS_MIGRATION_FILES_ARG}"
           -P ${CMAKE_SOURCE_DIR}/cmake/embed_migrations.cmake
   DEPENDS ${EOS_MIGRATION_FILES} ${CMAKE_SOURCE_DIR}/cmake/embed_migrations.cmake
-  COMMENT "Embedding SQL migrations")
+  COMMENT "Embedding SQL migrations"
+  VERBATIM)
 
 add_library(eoslib STATIC
   server/core/config.cpp
@@ -60,7 +61,11 @@ add_library(eoslib STATIC
   server/scanner/track_info.cpp
   server/scanner/scanner.cpp
   server/scanner/tag_report.cpp
+  server/scanner/derived.cpp
+  server/search/index.cpp
+  server/suggest/rules.cpp
   server/media/artwork.cpp
+  server/media/transcode.cpp
   server/api/http.cpp
   server/api/net.cpp
   server/api/node.cpp

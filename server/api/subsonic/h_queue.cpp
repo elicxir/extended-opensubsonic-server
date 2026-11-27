@@ -56,7 +56,7 @@ void add_queue_handlers(HandlerTable& t) {
   t.add("getPlayQueue", [](Ctx& c, Node& root) {
     auto q = load_queue(c.db, c.user.id);
     if (!q) return;
-    Loader loader(c.db, c.user.id);
+    Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
     Node n("playQueue");
     if (q->current_index && *q->current_index < static_cast<int64_t>(q->tracks.size()))
       n.set("current", q->tracks[static_cast<size_t>(*q->current_index)]);
@@ -91,7 +91,7 @@ void add_queue_handlers(HandlerTable& t) {
   t.add("getPlayQueueByIndex", [](Ctx& c, Node& root) {
     auto q = load_queue(c.db, c.user.id);
     if (!q) return;
-    Loader loader(c.db, c.user.id);
+    Loader loader(c.db, c.user.id, c.svc.cfg.show_virtual_albums);
     Node n("playQueueByIndex");
     n.set_opt("currentIndex", q->current_index);
     n.set("position", q->position_ms)
