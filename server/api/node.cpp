@@ -127,6 +127,8 @@ void node_xml(std::string& out, const Node& n, bool root) {
 
 }  // namespace
 
+nlohmann::ordered_json to_json_value(const Node& n) { return node_json(n); }
+
 std::string to_json(const Node& root) {
   json j;
   j[root.name()] = node_json(root);

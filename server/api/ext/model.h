@@ -1,0 +1,39 @@
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "api/ext/router.h"
+
+namespace eos::api::ext {
+
+// "manual" (3), "tag" (2), or for estimates (1) the method of the suggestion that made
+// the row ("rule" / "llm").
+std::string provenance(int64_t source, const std::optional<std::string>& method);
+
+// Songs as OpenSubsonic Child objects plus compositionId, arrangementId,
+// arrangementProvenance, titleIds, virtualAlbumIds, performanceKind, recordedDate.
+json songs(ExtCtx& c, const std::vector<std::string>& ids);
+// Albums as AlbumID3 plus kind and source.
+json albums(ExtCtx& c, const std::vector<std::string>& ids);
+
+json title_json(db::Connection& db, const std::string& id);
+json composition_json(db::Connection& db, const std::string& id);
+json arrangement_json(db::Connection& db, const std::string& id);
+json relation_json(db::Connection& db, const std::string& id, const std::string& seen_from = "");
+json folder_json(db::Connection& db, const std::string& id);
+
+// Effective links (manual exclusions applied, rows below `min_source` hidden).
+std::vector<std::string> track_title_ids(db::Connection& db, const std::string& track, int min_source);
+std::vector<std::string> title_track_ids(db::Connection& db, const std::string& title, int min_source);
+std::vector<std::string> folder_album_ids(db::Connection& db, const std::string& folder);
+std::vector<std::string> album_folder_ids(db::Connection& db, const std::string& album);
+// The arrangement a track belongs to (highest source >= min_source).
+std::optional<std::string> track_arrangement(db::Connection& db, const std::string& track, int min_source);
+
+bool exists(db::Connection& db, const char* table, const std::string& id);
+void require_track(db::Connection& db, const std::string& id);
+int64_t source_of(db::Connection& db, const char* table, const std::string& id);
+
+}  // namespace eos::api::ext

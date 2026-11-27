@@ -16,6 +16,7 @@
 #include "core/config.h"
 #include "core/crypto.h"
 #include "core/log.h"
+#include "api/ext/router.h"
 #include "api/subsonic/router.h"
 #include "db/migrate.h"
 #include "http/server.h"
@@ -87,6 +88,7 @@ int main(int argc, char** argv) {
     db::ReadPool reads(cfg.db_path(), 4);
     api::Services services(cfg, reads, writer, scanner, secret);
     api::Router router(services);
+    api::ext::ExtRouter ext_router(services);
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -124,7 +126,11 @@ int main(int argc, char** argv) {
 
     auto scratch = cfg.cache_dir() / "http";
     std::filesystem::create_directories(scratch);
-    http::run(router, cfg.listen, cfg.http_threads, scratch.string());  // blocks until http::stop()
+    std::vector<http::Route> routes = {
+        {"/rest/.*", [&](const api::Request& r) { return router.handle(r); }},
+        {"/ext/.*", [&](const api::Request& r) { return ext_router.handle(r); }},
+    };
+    http::run(routes, cfg.listen, cfg.http_threads, scratch.string());  // blocks until http::stop()
     signal_thread.join();
     scan_thread.join();
     writer.stop();
