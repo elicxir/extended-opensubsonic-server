@@ -6,7 +6,8 @@ eos は OpenSubsonic 互換の音楽サーバーです。サントラ系のコ�
 | --- | --- |
 | [tags.md](tags.md) | サーバーが読むタグ、独自タグ、ID の決まり方、情報の出どころと優先順位 |
 | [rest-api.md](rest-api.md) | OpenSubsonic 互換の `/rest/*`：認証、エラー、エンドポイントごとの振る舞い、トランスコード |
-| [ext-api.md](ext-api.md) | 独自拡張の `/ext/*`：読み取り、編集、候補と推定、ログインと API キー、書き出しと読み込み |
+| [ext-api.md](ext-api.md) | 独自拡張の `/ext/*`：読み取り、編集、候補と推定、ログインと API キー、書き出しと読み込み、類似度 |
+| [similarity.md](similarity.md) | 曲どうしの類似度の保存（設計と、決めていないこと） |
 | [sync.md](sync.md) | `/ext/session`（WebSocket）による共有リモコン、再生回数と音量と ReplayGain の扱い |
 | [configuration.md](configuration.md) | 設定ファイルと環境変数 |
 

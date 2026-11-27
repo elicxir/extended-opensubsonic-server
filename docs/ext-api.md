@@ -274,6 +274,38 @@
   - 照合できなかった数を `unmatched` で返します。
   - 2 回読み込んでも重複しません。
 - 応答：`{"imported": {"titles": N, …}, "unmatched": {"tracks": N, "albums": N}}`
+- 類似度（下記）は書き出しに入りません。ツールで作り直します。
+
+## 類似度（管理者、`audio-embed` などのツール用）
+
+曲どうしの類似度を、種類（`kind`）ごとに丸ごと入れ替えて保存します。音が似ているかどうかのような目安で、楽曲や関係のような「事実」ではありません。候補の承認の流れには乗らず、出どころも持ちません。設計は [similarity.md](similarity.md) にあります。
+
+| メソッドとパス | 説明 |
+| --- | --- |
+| `GET /ext/similarity` | 種類の一覧（`items`、`total`） |
+| `PUT /ext/similarity/{kind}` | その種類を丸ごと入れ替えます（1 トランザクション） |
+| `DELETE /ext/similarity/{kind}` | その種類を消します（204。ない種類は 404） |
+
+`PUT` の本文：
+
+```json
+{
+  "model": "laion/larger_clap_music",
+  "params": { "windows": 6, "centered": true, "k": 50 },
+  "trackCount": 1823,
+  "pairs": [["<曲 ID>", "<曲 ID>", 0.8197], ...]
+}
+```
+
+- `kind` は `a-z`・`0-9`・`_` の 1〜64 文字です。
+- `model` は必須です。`params` は任意のオブジェクトで、そのまま一覧に返します。`trackCount` は計算に入った曲の数で、省くと組のある曲の数になります。
+- 組の向きは問いません。同じ組が 2 回あれば点数の高いほうを残し、同じ曲どうしの組は捨てます。
+- 知らない曲 ID を含む組は飛ばし、`skipped` に数を返します。
+- 点数の尺度は種類ごとに決まります。種類をまたいで比べません。
+- 本文の上限は 8 MB です（曲ごと 50 件で、1823 曲が約 4 MB）。
+- 応答：`{"kind", "pairCount", "skipped", "trackCount"}`
+- 一覧の 1 件：`{"kind", "model", "params", "trackCount", "pairCount", "createdAt"}`（`createdAt` は UNIX ミリ秒）
+- 曲が削除される（`purge`）と、その曲の組も消えます。`missing` の曲の組は残ります。
 
 ## WebSocket
 

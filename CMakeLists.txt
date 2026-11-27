@@ -91,6 +91,7 @@ add_library(eoslib STATIC
   server/api/ext/h_account.cpp
   server/api/ext/h_transfer.cpp
   server/api/ext/h_graph.cpp
+  server/api/ext/h_similarity.cpp
   server/http/server.cpp
   server/http/session_socket.cpp
   server/sync/hub.cpp

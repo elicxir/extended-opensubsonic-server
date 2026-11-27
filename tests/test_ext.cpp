@@ -1,6 +1,7 @@
 // M4: the /ext API, end to end through ExtRouter (no network).
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -635,4 +636,93 @@ TEST_F(ExtTest, GraphPeopleAndAlbumsOnRequest) {
   ASSERT_NE(first, nullptr);
   EXPECT_EQ((*first)["degree"], 2);  // also in the virtual album "Game X Soundtrack"
   EXPECT_EQ((*first)["expanded"], false);
+}
+
+TEST_F(ExtTest, SimilarityReplacedOneKindAtATime) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
+       f1 = s->track("Other/01.flac");
+  ASSERT_FALSE(t1.empty());
+  auto info = s->get("/ext/info").body;
+  EXPECT_NE(std::find(info["features"].begin(), info["features"].end(), "similarity"), info["features"].end());
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 0);
+
+  // Either order; a pair given twice keeps the higher score; a song with itself and unknown
+  // ids are dropped (the unknown one is reported).
+  json body = {{"model", "test-model"},
+               {"params", {{"k", 2}, {"centered", true}}},
+               {"trackCount", 7},
+               {"pairs", json::array({json::array({t2, t1, 0.5}), json::array({t1, t2, 0.75}),
+                                      json::array({t1, t4, 0.25}), json::array({t1, t1, 1.0}),
+                                      json::array({t1, "nosuchsong", 0.9})})}};
+  auto r = s->call("PUT", "/ext/similarity/audio_embed", body);
+  ASSERT_EQ(r.status, 200) << r.body.dump();
+  EXPECT_EQ(r.body["pairCount"], 2);
+  EXPECT_EQ(r.body["skipped"], 1);
+  auto pair_score = [&](const std::string& kind, std::string a, std::string b) {
+    if (b < a) std::swap(a, b);
+    auto st = s->conn->prepare("SELECT score FROM similarity WHERE kind = ? AND track_a = ? AND track_b = ?");
+    st.bind_all(kind, a, b);
+    return st.step() ? st.real(0) : -1.0;
+  };
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t1, t2), 0.75);
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t4, t1), 0.25);
+
+  auto sets = s->get("/ext/similarity").body;
+  ASSERT_EQ(sets["total"], 1);
+  EXPECT_EQ(sets["items"][0]["kind"], "audio_embed");
+  EXPECT_EQ(sets["items"][0]["model"], "test-model");
+  EXPECT_EQ(sets["items"][0]["params"]["k"], 2);
+  EXPECT_EQ(sets["items"][0]["trackCount"], 7);
+  EXPECT_EQ(sets["items"][0]["pairCount"], 2);
+
+  // Another kind lives beside it; replacing a kind drops its old pairs only.
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_match",
+                    json{{"model", "m2"}, {"pairs", json::array({json::array({t1, f1, 0.1})})}})
+                .status,
+            200);
+  ASSERT_EQ(s->call("PUT", "/ext/similarity/audio_embed",
+                    json{{"model", "test-model"}, {"pairs", json::array({json::array({t2, t4, 0.5})})}})
+                .status,
+            200);
+  EXPECT_EQ(pair_score("audio_embed", t1, t2), -1.0);
+  EXPECT_DOUBLE_EQ(pair_score("audio_embed", t2, t4), 0.5);
+  EXPECT_DOUBLE_EQ(pair_score("audio_match", t1, f1), 0.1);
+  sets = s->get("/ext/similarity").body;
+  ASSERT_EQ(sets["total"], 2);
+  EXPECT_EQ(sets["items"][0]["kind"], "audio_embed");
+  EXPECT_EQ(sets["items"][0]["trackCount"], 2);  // no trackCount: the songs that have a pair
+
+  // A purged song takes its pairs with it.
+  s->conn->exec("PRAGMA foreign_keys = ON");
+  s->conn->run("DELETE FROM track WHERE id = ?", f1);
+  EXPECT_EQ(s->conn->scalar_int("SELECT COUNT(*) FROM similarity WHERE kind = 'audio_match'"), 0);
+
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_match").status, 204);
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_match").status, 404);
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 1);
+}
+
+TEST_F(ExtTest, SimilarityIsForAdministratorsAndChecksItsInput) {
+  auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac");
+  json good = {{"model", "m"}, {"pairs", json::array({json::array({t1, t2, 0.5})})}};
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", good, &s->user_key).status, 403);
+  EXPECT_EQ(s->get("/ext/similarity", &s->user_key).status, 403);
+  EXPECT_EQ(s->call("DELETE", "/ext/similarity/audio_embed", nullptr, &s->user_key).status, 403);
+
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/Audio-Embed", good).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"pairs", json::array()}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed",
+                    json{{"model", "m"}, {"pairs", json::array({json::array({t1, 0.5})})}})
+                .status,
+            400);
+  EXPECT_EQ(s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}, {"params", 3}, {"pairs", json::array()}})
+                .status,
+            400);
+  // A bad request changes nothing.
+  EXPECT_EQ(s->get("/ext/similarity").body["total"], 0);
+  // An empty set is allowed (a kind with no pairs yet).
+  auto r = s->call("PUT", "/ext/similarity/audio_embed", json{{"model", "m"}, {"pairs", json::array()}});
+  EXPECT_EQ(r.status, 200);
+  EXPECT_EQ(r.body["pairCount"], 0);
 }

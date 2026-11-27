@@ -19,6 +19,10 @@ of the same files. The model runs on CUDA when available (--device to choose).
   audio_embed.py embed --db eos.db --music /music --cache /cache
   audio_embed.py near  --db eos.db --cache /cache "Zufall" [--other-albums] [-k 10]
   audio_embed.py check --db eos.db --cache /cache [--groups title]  # how close are known versions?
+  audio_embed.py store --db eos.db --cache /cache --server http://eos:4540 [--k 50]  # EOS_API_KEY
+
+store sends each song's top K neighbours to the server, replacing the kind (docs/similarity.md).
+--db must be the server's own database: the pairs are sent as its track ids.
 """
 import argparse
 import os
@@ -199,6 +203,54 @@ def cmd_near(args):
                 break
 
 
+def top_pairs(m, k, chunk=1024):
+    """Each song's k nearest songs, as the union of unordered pairs {(i, j): score} with i < j."""
+    pairs = {}
+    k = min(k, len(m) - 1)
+    for start in range(0, len(m), chunk):
+        s = m[start : start + chunk] @ m.T
+        rows = np.arange(len(s))
+        s[rows, rows + start] = -np.inf  # not the song itself
+        top = np.argpartition(-s, k - 1, axis=1)[:, :k] if k > 0 else np.zeros((len(s), 0), int)
+        for r, js in enumerate(top):
+            i = start + r
+            for j in js:
+                pairs[(i, j) if i < j else (j, i)] = float(s[r, j])
+    return pairs
+
+
+def cmd_store(args):
+    """Send each song's top K neighbours to the server (PUT /ext/similarity/<kind>), replacing that kind."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    key = args.api_key or os.environ.get("EOS_API_KEY")
+    if not key:
+        sys.exit("an admin API key is needed: --api-key or EOS_API_KEY")
+    rows, m = load(args)
+    pairs = top_pairs(m, args.k)
+    body = {
+        "model": args.model,
+        "params": {"windows": args.windows, "centered": not args.raw, "k": args.k, "featureVersion": FEATURE_VERSION},
+        "trackCount": len(rows),
+        "pairs": [[rows[i][0], rows[j][0], round(score, 4)] for (i, j), score in sorted(pairs.items())],
+    }
+    data = json.dumps(body, separators=(",", ":")).encode()
+    print(f"{len(rows)} songs, {len(pairs)} pairs (top {args.k}), {len(data) / 1e6:.1f} MB -> "
+          f"{args.server.rstrip('/')}/ext/similarity/{args.kind}", flush=True)
+    req = urllib.request.Request(f"{args.server.rstrip('/')}/ext/similarity/{args.kind}", data=data, method="PUT",
+                                 headers={"Content-Type": "application/json", "X-Api-Key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            reply = json.load(resp)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"server said {e.code}: {e.read().decode(errors='replace')}")
+    print(f"stored {reply['pairCount']} pairs over {reply['trackCount']} songs"
+          + (f"; {reply['skipped']} pairs skipped (songs the server does not know: was --db its database?)"
+             if reply["skipped"] else ""))
+
+
 def _plain_title(title):
     """Lower case, without bracketed parts and version words: "Zufall (Piano Ver.)" -> "zufall"."""
     import re
@@ -281,6 +333,12 @@ def main():
     c.add_argument("--groups", choices=("composition", "title"), default="composition",
                    help="what counts as versions of one piece (title: same title on other albums)")
     c.set_defaults(fn=cmd_check)
+    s = sub.add_parser("store", help="send each song's top K neighbours to the server")
+    s.add_argument("--server", default=os.environ.get("EOS_SERVER", "http://localhost:4540"))
+    s.add_argument("--api-key", default="", help="an admin API key (default: $EOS_API_KEY)")
+    s.add_argument("--kind", default="audio_embed")
+    s.add_argument("--k", type=int, default=50, help="neighbours kept per song")
+    s.set_defaults(fn=cmd_store)
     args = ap.parse_args()
     args.fn(args)
 
