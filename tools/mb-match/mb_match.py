@@ -47,15 +47,30 @@ def mb_get(path, **params):
     params["fmt"] = "json"
     url = f"{MB}/{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in range(3):
+    attempts = 8
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 _last_request = time.time()
                 return json.load(r)
         except urllib.error.HTTPError as e:
             _last_request = time.time()
-            if e.code == 503 and attempt < 2:  # rate limited
-                time.sleep(2)
+            # 503: rate limited or briefly unavailable. Back off 2, 4, 8 ... s (at most a
+            # minute, never less than Retry-After) instead of losing the whole run: a
+            # throttled client keeps getting "Retry-After: 1" if it obeys it to the letter.
+            if e.code in (502, 503, 504) and attempt < attempts - 1:
+                retry_after = e.headers.get("Retry-After", "")
+                delay = max(int(retry_after) if retry_after.isdigit() else 0, min(60, 2 ** (attempt + 1)))
+                print(f"  MusicBrainz answered {e.code}; trying again in {delay} s", file=sys.stderr, flush=True)
+                time.sleep(delay)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:  # no answer at all
+            _last_request = time.time()
+            if attempt < attempts - 1:
+                delay = min(60, 2 ** (attempt + 1))
+                print(f"  MusicBrainz did not answer ({e}); trying again in {delay} s", file=sys.stderr, flush=True)
+                time.sleep(delay)
                 continue
             raise
 
