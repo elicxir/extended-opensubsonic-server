@@ -9,14 +9,16 @@ How a song becomes a vector:
   1. 10-second windows are read at even steps through the file (at most --windows)
   2. each window goes through CLAP (music checkpoint) and gives a 512-dim vector
   3. the windows are averaged and the result is scaled to length 1
-Two songs are compared by the dot product of their vectors (cosine similarity).
+Two songs are compared by the dot product of their vectors after the mean vector of the
+library is taken away (cosine similarity around the centre; --raw skips that).
 
-Vectors are cached per song in --cache/<model>/<track id>.npy, so a second run only
-embeds new songs.
+Vectors are cached per song in --cache/<model>/<audio md5>.npy (the track id when the file
+has no MD5), so a second run only embeds new songs, and the cache works with any database
+of the same files. The model runs on CUDA when available (--device to choose).
 
   audio_embed.py embed --db eos.db --music /music --cache /cache
   audio_embed.py near  --db eos.db --cache /cache "Zufall" [--other-albums] [-k 10]
-  audio_embed.py check --db eos.db --cache /cache     # how close are known versions?
+  audio_embed.py check --db eos.db --cache /cache [--groups title]  # how close are known versions?
 """
 import argparse
 import os
@@ -37,11 +39,14 @@ def open_db(path):
 
 
 def tracks(db):
-    """(id, path, duration_s, title, album, album_id) of every song that is not missing."""
-    return db.execute(
-        "SELECT t.id, t.path, t.duration_ms / 1000.0, t.title, al.name, al.id FROM track t "
+    """(id, path, duration_s, title, album, album_id, key) of every song that is not missing.
+
+    key names the cached vector: the audio MD5 when the file has one, so vectors computed
+    against one database can be reused with another (track ids differ between scans)."""
+    return [r[:6] + (r[6] or "id-" + r[0],) for r in db.execute(
+        "SELECT t.id, t.path, t.duration_ms / 1000.0, t.title, al.name, al.id, nullif(t.audio_md5, '') FROM track t "
         "JOIN album al ON al.id = t.album_id WHERE t.missing = 0 ORDER BY al.name, t.disc_number, t.track_number"
-    ).fetchall()
+    ).fetchall()]
 
 
 def cache_dir(args):
@@ -74,35 +79,73 @@ def read_windows(path, max_windows):
         return out
 
 
+class _Songs:
+    """Decoding and the mel features run on the CPU; a DataLoader runs them in worker processes
+    so the model (on the GPU) does not wait for them."""
+
+    def __init__(self, todo, args):
+        self.todo, self.music, self.windows, self.model = todo, args.music, args.windows, args.model
+        self.processor = None
+
+    def __len__(self):
+        return len(self.todo)
+
+    def __getitem__(self, i):
+        rel = self.todo[i][1]
+        try:
+            if self.processor is None:  # one per worker process
+                import torch
+                from transformers import ClapProcessor
+
+                torch.set_num_threads(1)
+                self.processor = ClapProcessor.from_pretrained(self.model)
+            windows = read_windows(os.path.join(self.music, rel), self.windows)
+            return i, dict(self.processor(audios=windows, sampling_rate=RATE, return_tensors="pt")), None
+        except Exception as e:  # one unreadable file must not stop the run
+            return i, None, f"{type(e).__name__}: {e}"
+
+
 def cmd_embed(args):
     import torch
+    from torch.utils.data import DataLoader
     from transformers import ClapModel, ClapProcessor
 
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_num_threads(args.threads)
     out_dir = cache_dir(args)
-    todo = [t for t in tracks(open_db(args.db)) if not os.path.exists(os.path.join(out_dir, t[0] + ".npy"))]
+    todo, seen = [], set()
+    for t in tracks(open_db(args.db)):
+        if t[6] not in seen and not os.path.exists(os.path.join(out_dir, t[6] + ".npy")):
+            todo.append(t)
+        seen.add(t[6])
     if args.limit:
         todo = todo[: args.limit]
-    print(f"{len(todo)} songs to embed -> {out_dir}", flush=True)
+    print(f"{len(todo)} songs to embed -> {out_dir} on {device}"
+          + (f" ({torch.cuda.get_device_name(0)})" if device.startswith("cuda") else ""), flush=True)
     if not todo:
         return
-    model = ClapModel.from_pretrained(args.model).eval()
-    processor = ClapProcessor.from_pretrained(args.model)
+    model = ClapModel.from_pretrained(args.model).eval().to(device)
+    ClapProcessor.from_pretrained(args.model)  # download once here, not in every worker at the same time
+    loader = DataLoader(_Songs(todo, args), batch_size=None, num_workers=args.workers,
+                        prefetch_factor=4 if args.workers else None)
 
     started, done, failed, seconds = time.time(), 0, 0, 0.0
-    for tid, rel, duration, title, _album, _aid in todo:
+    for i, inputs, error in loader:
+        _tid, rel, duration, _title, _album, _aid, key = todo[i]
         try:
-            windows = read_windows(os.path.join(args.music, rel), args.windows)
+            if error:
+                raise RuntimeError(error)
             vectors = []
-            for i in range(0, len(windows), args.batch):
-                inputs = processor(audios=windows[i : i + args.batch], sampling_rate=RATE, return_tensors="pt")
+            n = len(inputs["input_features"])
+            for s in range(0, n, args.batch):
+                part = {k: v[s : s + args.batch].to(device) for k, v in inputs.items()}
                 with torch.inference_mode():
-                    vectors.append(model.get_audio_features(**inputs).numpy())
+                    vectors.append(model.get_audio_features(**part).float().cpu().numpy())
             v = np.concatenate(vectors).mean(axis=0)
             v /= np.linalg.norm(v) + 1e-12
-            tmp = os.path.join(out_dir, tid + ".tmp.npy")
+            tmp = os.path.join(out_dir, key + ".tmp.npy")
             np.save(tmp, v.astype(np.float32))
-            os.replace(tmp, os.path.join(out_dir, tid + ".npy"))
+            os.replace(tmp, os.path.join(out_dir, key + ".npy"))
             done += 1
             seconds += duration
         except Exception as e:  # one unreadable file must not stop the run
@@ -121,13 +164,20 @@ def load(args):
     out_dir = cache_dir(args)
     rows, vectors = [], []
     for t in tracks(open_db(args.db)):
-        p = os.path.join(out_dir, t[0] + ".npy")
+        p = os.path.join(out_dir, t[6] + ".npy")
         if os.path.exists(p):
             rows.append(t)
             vectors.append(np.load(p))
     if not rows:
         sys.exit(f"no vectors in {out_dir}: run 'embed' first")
-    return rows, np.stack(vectors)
+    m = np.stack(vectors)
+    if not args.raw:
+        # CLAP vectors share a large common part: raw, every pair of songs scores 0.96-0.996.
+        # Without the library's mean the order barely changes but the scores spread out
+        # (median about 0), which is what a threshold or an edge weight needs.
+        m = m - m.mean(axis=0)
+        m /= np.linalg.norm(m, axis=1, keepdims=True) + 1e-12
+    return rows, m
 
 
 def cmd_near(args):
@@ -149,16 +199,35 @@ def cmd_near(args):
                 break
 
 
+def _plain_title(title):
+    """Lower case, without bracketed parts and version words: "Zufall (Piano Ver.)" -> "zufall"."""
+    import re
+    import unicodedata
+
+    t = unicodedata.normalize("NFKC", title).lower()
+    t = re.sub(r"[(\[（【〜~].*?([)\]）】〜~]|$)", " ", t)
+    t = re.sub(r"\b(rmx|remix|ver\.?|version|arrange|arranged|piano|orchestra|live)\b", " ", t)
+    return re.sub(r"[\W_]+", " ", t).strip()
+
+
 def cmd_check(args):
     """Known versions of one composition as a yardstick: where do they rank among the neighbours?"""
     rows, m = load(args)
     index = {r[0]: i for i, r in enumerate(rows)}
-    db = open_db(args.db)
     groups = {}
-    for tid, comp in db.execute(
-            "SELECT e.track_id, a.composition_id FROM track_arrangement_eff e JOIN arrangement a ON a.id = e.arrangement_id"):
-        if tid in index:
-            groups.setdefault(comp, []).append(index[tid])
+    if args.groups == "title":
+        # a rough yardstick for a database without compositions: the same title on more than
+        # one album. Noisy: jingles that only share a name ("Game Over") count as versions too.
+        for i, r in enumerate(rows):
+            groups.setdefault(_plain_title(r[3]), []).append(i)
+        groups = {k: v for k, v in groups.items() if k and len({rows[i][5] for i in v}) > 1}
+    else:
+        for tid, comp in open_db(args.db).execute(
+                "SELECT e.track_id, a.composition_id FROM track_arrangement_eff e JOIN arrangement a ON a.id = e.arrangement_id"):
+            if tid in index:
+                groups.setdefault(comp, []).append(index[tid])
+    print(f"{len(rows)} songs, {len(groups)} groups of versions ({args.groups}), "
+          f"{sum(len(v) for v in groups.values())} songs in them; a random order would give median rank {len(rows) // 2}")
     sims = m @ m.T
     np.fill_diagonal(sims, -1)
     order = np.argsort(-sims, axis=1)
@@ -190,11 +259,16 @@ def main():
     ap.add_argument("--cache", default=os.environ.get("EOS_EMBED_CACHE", "/cache/audio-embed"))
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--windows", type=int, default=6, help="most 10-second windows per song")
+    ap.add_argument("--raw", action="store_true", help="near/check: compare without subtracting the mean vector")
     sub = ap.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("embed")
     e.add_argument("--music", default=os.environ.get("EOS_MUSIC", "/music"))
-    e.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 2) - 2))
-    e.add_argument("--batch", type=int, default=6)
+    e.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 2) - 2),
+                   help="torch threads in the main process (matters on the CPU)")
+    e.add_argument("--workers", type=int, default=min(8, max(0, (os.cpu_count() or 2) - 2)),
+                   help="processes that decode files and compute features (0 = in the main process)")
+    e.add_argument("--device", default="", help="cuda, cpu, ... (default: cuda when available)")
+    e.add_argument("--batch", type=int, default=6, help="windows per model call")
     e.add_argument("--limit", type=int, default=0, help="stop after this many songs (for timing)")
     e.set_defaults(fn=cmd_embed)
     n = sub.add_parser("near")
@@ -204,6 +278,8 @@ def main():
     n.add_argument("--max-queries", type=int, default=3)
     n.set_defaults(fn=cmd_near)
     c = sub.add_parser("check")
+    c.add_argument("--groups", choices=("composition", "title"), default="composition",
+                   help="what counts as versions of one piece (title: same title on other albums)")
     c.set_defaults(fn=cmd_check)
     args = ap.parse_args()
     args.fn(args)

@@ -47,7 +47,42 @@
 - 1 曲から 10 秒の窓を均等に最大 6 か所とり、平均する。
 - コマンドは `embed`（計算）、`near`（近い曲の一覧）、`check`（同じ楽曲の別バージョンが近傍の何位に来るか）。
 - ノート PC では GPU が使えず（内蔵 Radeon Vega）、CPU で 1 曲 約 3.6 秒。73 曲で中止した。
-- **類似の質はまだ見ていない。**
+- デスクトップ（RTX 4070 Ti SUPER）で全 1823 曲を計算した（2026-11-27）。12.4 分、失敗 0。
+  GPU の使用率は数 % で、律速は CPU 側の FLAC の読み込みとメル特徴量。これは `--workers` で並列にした。
+
+#### 質を見た結果
+
+全曲のスキャンを新しく作った DB（楽曲 0 件）で見た。別バージョンの目安には、`check --groups title` を使った（違うアルバムにある同じ曲名、74 組 256 曲）。曲名が同じだけのジングルも混ざる。
+
+| | 結果 | ランダムなら |
+| --- | --- | --- |
+| 別アルバムの同名曲の順位（中央値） | 458 位 | 911 位 |
+| 同じく上位 10 位以内 | 7 % | 0.5 % |
+| 上位 10 件のうち同じアルバムの曲 | 31 % | |
+
+- **音の近さは取れている。** ピアノ曲の近くにはピアノ曲が並ぶ。「Zufall」のピアノ版の近くには、浜渦のピアノ作品、SF2 ピアノ曲集、ホロヴィッツのシューマンが並ぶ。悪魔城のリミックスの近くには、同じ「ミュージック フロム 悪魔城ドラキュラ」の曲が並ぶ。
+- **別バージョンはほぼ取れない。** ランダムよりはましだが、偶然に近い。CLAP は音色と雰囲気を見ていて、旋律は見ていない。別バージョンは `audio-match` に任せる（当初の想定どおり）。
+- **点数がつぶれている。** そのままだと、どの 2 曲も 0.96〜0.996 になる。ライブラリの平均ベクトルを引いて長さ 1 に戻すと、順位はほぼ変わらず、点数は中央値 0、99 パーセンタイル 0.94 に広がる。`near` と `check` は既定でこれをする（`--raw` で無効）。辺のしきい値や重みに使うならこの点数がよい。
+- 主成分を 3 つ除くと、別バージョンの上位 50 位以内が 14 % から 21 % になった。小さい改善なので採用していない。
+
+#### キャッシュの鍵
+
+ノート PC の DB とデスクトップでスキャンした DB では、同じファイルでもトラック ID が違った（引継ぎに書いた ID はデスクトップの DB にない）。そこで、ベクトルのファイル名を音声の MD5（`track.audio_md5`）にした。MD5 がない曲（1823 曲中 17 曲）は `id-<トラック ID>` にする。同じファイルなら、どの DB でもキャッシュをそのまま使える。
+
+#### Windows での動かし方（Docker なし）
+
+Docker Desktop のディスクが C: を埋めたので、デスクトップでは E: に venv を作って動かした。venv も一時ファイルもモデルも、gitignore 済みの `data/` に置く。
+
+```bash
+python -m venv data/venv
+data/venv/Scripts/python -m pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1
+data/venv/Scripts/python -m pip install transformers==4.46.3 numpy soundfile soxr
+export HF_HOME=data/gpu-run/cache/hf TMP=data/tmp TEMP=data/tmp PYTHONIOENCODING=utf-8
+data/venv/Scripts/python tools/audio-embed/audio_embed.py --db data/gpu-run/eos.db \
+  --cache data/gpu-run/cache/audio-embed embed --music 'E:\elix\musics'
+```
+
+`data/gpu-run/eos.db` は、`eos-admin scan` で新しく作ったもの（ライブラリは `/music` にマウント）。
 
 ## git に入っていないもの
 
@@ -125,11 +160,7 @@
    docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v $PWD/data/graph-sample:/sample -v <音楽のフォルダ>:/music:ro -v $PWD/data/graph-sample/cache/embed:/cache eos-embed --db /sample/eos.db --cache /cache/audio-embed embed
    ```
 
-   GPU を使うときに変えるところ：
-
-   - `tools/audio-embed/Dockerfile`：PyTorch を CPU 版（`--index-url …/whl/cpu`）から CUDA 版に替える。
-   - `audio_embed.py` の `cmd_embed`：モデルと入力を GPU に載せ（`.to("cuda")`）、結果を `.cpu()` で戻す。
-   - `docker run` に `--gpus all` を付ける。
+   GPU 対応は済んでいる。イメージは既定で CUDA 版の PyTorch を入れる（CPU 版は `--build-arg TORCH_INDEX=cpu`）。`docker run` に `--gpus all` を付ける。Docker を使わない動かし方は、上の「Windows での動かし方」を参照。
 
 6. `check` と `near` で質を見る（`embed` と同じマウントで、最後のコマンドだけ替える）。
 
@@ -147,7 +178,8 @@
 ## 残っている作業
 
 - `client/libeos` に `graph()` を足す。libeos は別のブランチ（`claude/libeos-cpp-api-client-5bb0f9`）にある。kleulir はそれを使う。
-- 類似グラフ：質の確認 → 保存の形 → API → テストとドキュメント。
+- 類似グラフ：~~質の確認~~（済。上の「質を見た結果」）→ 保存の形 → API → テストとドキュメント。
+- 承認済みのサンプル DB で `check`（楽曲単位）を回す。ベクトルは MD5 で引くので、計算し直さなくてよい。
 
 ## 候補の承認で見つかった問題（グラフとは別件）
 
