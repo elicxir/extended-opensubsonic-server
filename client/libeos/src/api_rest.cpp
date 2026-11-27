@@ -22,7 +22,12 @@ void add_opt(Query& q, const char* key, const std::optional<int>& v) {
 void Api::ping() { impl_->rest("ping"); }
 
 User Api::user() {
-  auto r = impl_->rest("getUser");
+  // Subsonic asks for the name; eos answers for the key's owner without it. With an
+  // API key the name is not known here, with a token it is.
+  Query params;
+  const Options& o = impl_->http.options();
+  if (o.api_key.empty() && !o.username.empty()) params.emplace_back("username", o.username);
+  auto r = impl_->rest("getUser", std::move(params));
   return parsed("getUser", [&] {
     const json& u = object(r, "user");
     return User{parse::get<std::string>(u, "username"), parse::get<bool>(u, "adminRole")};
@@ -205,6 +210,11 @@ std::string Api::cover_art_url(const std::string& cover_art_id, int size) const 
 Bytes Api::cover_art(const std::string& cover_art_id, int size) {
   Query p{{"id", cover_art_id}, {"f", "json"}};
   if (size > 0) p.emplace_back("size", std::to_string(size));
+  // A plain server wants the version and client name on every call, and the token
+  // in the query (an API key travels in the header).
+  p.emplace_back("v", "1.16.1");
+  p.emplace_back("c", impl_->http.options().client_name);
+  impl_->add_token(p);
   auto res = impl_->http.send("GET", "/rest/getCoverArt", p);
   // Errors arrive as a Subsonic response (HTTP 200), the picture as image/*.
   if (res.content_type.starts_with("image/") && res.status == 200) return {std::move(res.body), res.content_type};

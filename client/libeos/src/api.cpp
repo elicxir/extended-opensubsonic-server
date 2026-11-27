@@ -1,4 +1,7 @@
+#include <random>
+
 #include "impl.h"
+#include "md5.h"
 #include "parse.h"
 
 namespace eos::client {
@@ -23,6 +26,7 @@ json Api::Impl::rest(const std::string& endpoint, Query params) {
   params.emplace_back("f", "json");
   params.emplace_back("v", kSubsonicVersion);
   params.emplace_back("c", http.options().client_name);
+  add_token(params);  // an API key travels in the X-Api-Key header instead
   auto res = http.send("POST", "/rest/" + endpoint, {}, encode_query(params), "application/x-www-form-urlencoded");
 
   auto doc = json::parse(res.body, nullptr, false);
@@ -69,8 +73,37 @@ json Api::Impl::ext_get(const std::string& path, Query query) {
   return ext("GET", path, std::move(query));
 }
 
+void Api::Impl::add_token(Query& params) const {
+  const Options& o = http.options();
+  if (!o.api_key.empty() || o.token.empty()) return;
+  params.emplace_back("u", o.username);
+  params.emplace_back("t", o.token);
+  params.emplace_back("s", o.salt);
+}
+
+std::string Api::make_token(const std::string& password, const std::string& salt) { return md5_hex(password + salt); }
+
+TokenLogin Api::token_login(const Options& server, const std::string& username, const std::string& password) {
+  static const char* const digits = "0123456789abcdef";
+  std::random_device random;
+  std::string salt;
+  for (int i = 0; i < 16; ++i) salt.push_back(digits[random() % 16]);
+
+  Options o = server;
+  o.api_key.clear();
+  o.username = username;
+  o.salt = salt;
+  o.token = make_token(password, salt);
+  Api api(o);
+  api.ping();  // throws Error (unauthorized()) when the server does not take them
+  return {username, o.token, salt};
+}
+
 Query Api::Impl::media_query(Query params) const {
-  params.emplace_back("apiKey", http.options().api_key);
+  if (http.options().api_key.empty())
+    add_token(params);
+  else
+    params.emplace_back("apiKey", http.options().api_key);
   params.emplace_back("v", kSubsonicVersion);
   params.emplace_back("c", http.options().client_name);
   return params;

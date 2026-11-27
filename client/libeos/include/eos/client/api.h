@@ -7,6 +7,8 @@
 //   UI thread. One Api may be used from several threads at once; connections are kept
 //   open and reused.
 // - A failed call throws eos::client::Error (error.h).
+// - A plain OpenSubsonic server works too, for the /rest calls: log in with
+//   Api::token_login() and put its result into Options instead of an api_key.
 // - ids are opaque strings. Cover art ids come from Song::cover_art / Album::cover_art.
 #pragma once
 
@@ -25,6 +27,10 @@ namespace eos::client {
 struct Options {
   std::string base_url;  // "http://host:4540", or with a path prefix behind a reverse proxy
   std::string api_key;   // per-device key (Api::login, eos-admin apikey create)
+  // For a plain OpenSubsonic server, which has no API keys: Subsonic token
+  // authentication (Api::token_login). Used when api_key is empty. /ext is not
+  // there on such a server; only the /rest calls work.
+  std::string username, token, salt;
   std::string client_name = "libeos";  // the Subsonic `c` parameter and the User-Agent
   long connect_timeout_ms = 10'000;
   long timeout_ms = 30'000;  // per request
@@ -101,6 +107,13 @@ class Api {
   // (POST /ext/auth/login). `server.api_key` is not used.
   static LoginResult login(const Options& server, const std::string& username, const std::string& password,
                            const std::string& device_name);
+
+  // For a server without /ext (Navidrome and other OpenSubsonic servers): makes a
+  // salt and the token for it (t = md5(password + salt)), and checks them with a
+  // ping. The password itself need not be kept: the pair goes on being accepted.
+  static TokenLogin token_login(const Options& server, const std::string& username, const std::string& password);
+  // The token for a password and a salt, as 32 hex digits.
+  static std::string make_token(const std::string& password, const std::string& salt);
 
   // ---- /rest: system ----
   void ping();  // throws unless the server answers and accepts the key

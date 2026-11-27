@@ -360,6 +360,11 @@ struct LoginResult {
   bool admin = false;
 };
 
+// What Api::token_login() hands back: put the three into Options to stay logged in.
+struct TokenLogin {
+  std::string username, token, salt;
+};
+
 struct Bytes {
   std::string data;
   std::string content_type;

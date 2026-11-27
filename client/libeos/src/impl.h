@@ -28,6 +28,8 @@ struct Api::Impl {
 
   // Query for the media URLs (stream, download, getCoverArt): key and client name.
   Query media_query(Query params) const;
+  // Adds u, t and s when the session is by Subsonic token instead of an API key.
+  void add_token(Query& params) const;
 
   Http http;
 };
