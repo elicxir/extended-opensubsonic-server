@@ -341,6 +341,21 @@ TEST_F(M3Test, RuleSuggestions) {
   EXPECT_EQ(rules()["medley"], 1);
   EXPECT_EQ(payload("same_composition")["tracks"].size(), 2u);
 
+  // The test files are a second long: jingle-length, so the group is only a weak guess.
+  auto score = [&] {
+    auto st = conn->prepare("SELECT score FROM suggestion WHERE rule = 'same_composition'");
+    return st.step() ? st.real(0) : -1.0;
+  };
+  auto evidence = [&] { return conn->scalar_text("SELECT evidence FROM suggestion WHERE rule = 'same_composition'"); };
+  EXPECT_DOUBLE_EQ(score(), 0.4);
+  ASSERT_TRUE(evidence());
+  EXPECT_EQ(json::parse(*evidence())["reason"], "jingle_length");
+  // One full-length song is enough to make it an ordinary suggestion again.
+  conn->run("UPDATE track SET duration_ms = 95000 WHERE path = 'Other/02.flac'");
+  suggest::run_rules(*conn, cfg);  // a scan would read the length back from the file
+  EXPECT_DOUBLE_EQ(score(), 1.0);
+  EXPECT_FALSE(evidence());
+
   // A rejected suggestion is not raised again; a rescan adds nothing new.
   conn->run("UPDATE suggestion SET status = 'rejected' WHERE rule = 'derivative'");
   auto again = scanner->scan(true);
