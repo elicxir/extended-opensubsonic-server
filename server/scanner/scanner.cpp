@@ -115,9 +115,10 @@ void write_track(db::Connection& c, int64_t lib_id, const Result& r, int64_t now
       "disc_number, track_number, duration_ms, suffix, content_type, bit_rate, sample_rate, "
       "bit_depth, channels, size, mtime, audio_md5, mbz_recording_id, mbz_track_id, display_artist, "
       "display_composer, performance_kind, recorded_date, release_date, year, has_embedded_art, "
-      "tags_json, missing, missing_since, created_at, updated_at) "
+      "tags_json, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, missing, missing_since, "
+      "created_at, updated_at) "
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-      "?, 0, NULL, ?, ?) "
+      "?, ?, ?, ?, ?, 0, NULL, ?, ?) "
       "ON CONFLICT(id) DO UPDATE SET pid = excluded.pid, library_id = excluded.library_id, "
       "path = excluded.path, album_id = excluded.album_id, title = excluded.title, "
       "sort_title = excluded.sort_title, subtitle = excluded.subtitle, "
@@ -131,7 +132,9 @@ void write_track(db::Connection& c, int64_t lib_id, const Result& r, int64_t now
       "display_composer = excluded.display_composer, performance_kind = excluded.performance_kind, "
       "recorded_date = excluded.recorded_date, release_date = excluded.release_date, "
       "year = excluded.year, has_embedded_art = excluded.has_embedded_art, "
-      "tags_json = excluded.tags_json, missing = 0, missing_since = NULL, "
+      "tags_json = excluded.tags_json, rg_track_gain = excluded.rg_track_gain, "
+      "rg_track_peak = excluded.rg_track_peak, rg_album_gain = excluded.rg_album_gain, "
+      "rg_album_peak = excluded.rg_album_peak, missing = 0, missing_since = NULL, "
       "updated_at = excluded.updated_at",
       r.id, ti.track_pid, lib_id, ti.rel_path, r.album_id, title, sort_title, subtitle, ti.disc,
       ti.track, ti.raw.duration_ms, ti.suffix, ti.content_type,
@@ -142,7 +145,7 @@ void write_track(db::Connection& c, int64_t lib_id, const Result& r, int64_t now
       ti.mtime_ms, ti.raw.audio_md5, nonempty(ti.mbz_recording_id), nonempty(ti.mbz_track_id),
       ti.display_artist, nonempty(ti.display_composer), ti.performance_kind,
       nonempty(ti.recorded_date), nonempty(ti.release_date), ti.year, ti.raw.has_picture,
-      tags_json.dump(), now, now);
+      tags_json.dump(), ti.rg_track_gain, ti.rg_track_peak, ti.rg_album_gain, ti.rg_album_peak, now, now);
 
   c.run("DELETE FROM participant WHERE entity_type = 'track' AND entity_id = ? AND source = ?", r.id,
         kSourceTag);

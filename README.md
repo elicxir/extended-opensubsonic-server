@@ -6,23 +6,16 @@ collections (works, compositions, arrangements, relations, virtual albums).
 - Requirements: https://claude.ai/artifact/YSMz59jZw56DzgCaJiT9Rt
 - Detailed design: https://claude.ai/artifact/NzgE1GsRzzUFN6cHbja7ce
 
-Status: **M4** — the `/ext` API on top of M3:
+Status: **M5** — the shared remote control over WebSocket (`/ext/session`): one queue and
+playback state per user, edits applied in arrival order, one active device making the
+sound, transfer between devices, per-device volume, REST play queue kept in step.
+ReplayGain values are read from tags and sent as `replayGain` in song data.
 
-- reading: folders, albums (physical / virtual), works and their songs, compositions with
-  arrangements, `/ext/songs/{id}/versions` (arrangements, performances, relations),
-  grouped search, suggestions, scan progress
-- editing (admins): relations, compositions, arrangements, works, folders, virtual albums,
-  song and album overrides; tag-made rows cannot be deleted (409 `tag_managed`), unlinking
-  them stores an exclusion instead
-- suggestions: accept (optionally edited), reject, batch; estimates from tools such as an
-  LLM via `POST /ext/suggestions`, applied at once above
-  `[estimate] auto_apply_min_confidence`; every link reports its `provenance`
-  (`manual`, `tag`, `rule`, `llm`) and `?includeEstimated=false` hides estimates
-- `POST /ext/auth/login` (password -> device API key), `/ext/apikeys`
-- `GET /ext/export` / `POST /ext/import`: manual data as JSON, re-matched by pid, audio MD5
-  and path when imported into a fresh database
+**Server contract for client authors: [docs/](docs/README.md)** (tags and IDs, `/rest`,
+`/ext`, sync protocol, configuration).
 
-Earlier milestones: transcoding (opus/mp3), custom tags (`COLLECTION_WORK`, `COLLECTION`,
+Earlier milestones: the `/ext` API (reads, edits, suggestions and LLM estimates with
+provenance, login and API keys, export/import) in M4; transcoding (opus/mp3), custom tags (`COLLECTION_WORK`, `COLLECTION`,
 `COLLECTION_ALBUM`, `WORK`, `ARRANGEMENT`), rule-based suggestions, FTS5 search, virtual
 folders in `getIndexes` / `getMusicDirectory`. Virtual albums stay out of `/rest` album
 lists unless `[subsonic] virtual_albums = "show"`.

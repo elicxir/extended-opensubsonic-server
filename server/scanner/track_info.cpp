@@ -1,6 +1,7 @@
 #include "scanner/track_info.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 #include "core/ids.h"
@@ -86,6 +87,27 @@ std::vector<Person> performers(const TagMap& tags) {
     if (!p.name.empty()) out.push_back(std::move(p));
   }
   return out;
+}
+
+// "-6.54 dB" -> -6.54
+std::optional<double> parse_number(const std::string& s) {
+  auto t = trim(s);
+  if (t.empty()) return std::nullopt;
+  try {
+    size_t used = 0;
+    double v = std::stod(t, &used);
+    if (used == 0 || !std::isfinite(v)) return std::nullopt;
+    return v;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+// R128_*_GAIN (Opus) is a Q7.8 integer relative to -23 LUFS; ReplayGain 2.0 uses -18 LUFS.
+std::optional<double> r128_to_replaygain(const std::string& s) {
+  auto v = parse_number(s);
+  if (!v) return std::nullopt;
+  return *v / 256.0 + 5.0;
 }
 
 std::optional<int> year_of(const std::string& date) {
@@ -202,6 +224,12 @@ TrackInfo interpret(const RawFile& raw, const std::string& rel_path, int64_t siz
   for (const auto& [name, tag] : cfg.tags)
     if (auto vals = custom_tag_values(t, tag); !vals.empty()) ti.custom[name] = std::move(vals);
   ti.arrangement = first(t, {"ARRANGEMENT"});
+  ti.rg_track_gain = parse_number(first(t, {"REPLAYGAIN_TRACK_GAIN"}));
+  if (!ti.rg_track_gain) ti.rg_track_gain = r128_to_replaygain(first(t, {"R128_TRACK_GAIN"}));
+  ti.rg_album_gain = parse_number(first(t, {"REPLAYGAIN_ALBUM_GAIN"}));
+  if (!ti.rg_album_gain) ti.rg_album_gain = r128_to_replaygain(first(t, {"R128_ALBUM_GAIN"}));
+  ti.rg_track_peak = parse_number(first(t, {"REPLAYGAIN_TRACK_PEAK"}));
+  ti.rg_album_peak = parse_number(first(t, {"REPLAYGAIN_ALBUM_PEAK"}));
 
   ti.album = first(t, {"ALBUM"});
   if (ti.album.empty()) ti.album = kUnknownAlbum;
