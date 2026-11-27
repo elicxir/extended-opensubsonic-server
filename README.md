@@ -14,6 +14,11 @@ ReplayGain values are read from tags and sent as `replayGain` in song data.
 **Server contract for client authors: [docs/](docs/README.md)** (tags and IDs, `/rest`,
 `/ext`, sync protocol, configuration).
 
+Helper tools (`docker compose run --rm tools …`, see [docs/tools.md](docs/tools.md)):
+`audio-match` finds which original an arrangement plays by comparing the audio (chroma
+alignment); `mb-match` proposes compositions and arrangements from MusicBrainz. Both send
+suggestions to `/ext/suggestions` for review.
+
 Earlier milestones: the `/ext` API (reads, edits, suggestions and LLM estimates with
 provenance, login and API keys, export/import) in M4; transcoding (opus/mp3), custom tags (`COLLECTION_WORK`, `COLLECTION`,
 `COLLECTION_ALBUM`, `WORK`, `ARRANGEMENT`), rule-based suggestions, FTS5 search, virtual

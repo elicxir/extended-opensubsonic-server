@@ -122,6 +122,14 @@ TEST(Suggest, BaseTitleAndDerivativeSubtype) {
   EXPECT_EQ(suggest::derivative_subtype("Theme (Instrumental)", cfg), "instrumental");
   EXPECT_EQ(suggest::derivative_subtype("Theme (Off Vocal)", cfg), "off_vocal");
   EXPECT_EQ(suggest::derivative_subtype("Theme (DJ Foo Remix)", cfg), "remix");
+  EXPECT_EQ(suggest::derivative_subtype("Theme RMX", cfg), "remix");
+  EXPECT_EQ(suggest::derivative_subtype("Theme remix. 2", cfg), "remix");
+  // The number and the title before "remix" stay with the title, not the note.
+  EXPECT_EQ(suggest::base_title("Bloody Tears remix. 1", cfg), "bloodytears");
+  EXPECT_EQ(suggest::base_title("Bloody Tears RMX", cfg), "bloodytears");
+  EXPECT_EQ(suggest::base_title("Theme (DJ Foo Remix)", cfg), "theme");
+  EXPECT_EQ(suggest::base_title("Remix Party", cfg), "remixparty");
+  EXPECT_EQ(suggest::derivative_subtype("Remix Party", cfg), std::nullopt);
   EXPECT_EQ(suggest::derivative_subtype("Theme", cfg), std::nullopt);
   EXPECT_EQ(suggest::derivative_subtype("Piano Ver.", cfg), std::nullopt);
 }

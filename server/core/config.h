@@ -80,7 +80,9 @@ struct Config {
   std::vector<std::string> derivative_patterns = {
       R"(\(?\s*TV\s*Size\s*\)?)", R"(\(?\s*(TV|Short)\s*(Ver\.?|Version|Edit)\s*\)?)",
       R"(\(?\s*Instrumental\s*\)?)", R"(\(?\s*Off\s*Vocal\s*\)?)", R"(\(?\s*Karaoke\s*\)?)",
-      R"(\(?\s*[^()]*Remix\s*\)?)"};
+      // Remix: a bracketed note that says remix ("(DJ Foo Remix)"), or a trailing word with an
+      // optional number ("Theme remix. 1", "Theme RMX"). The word inside a title is kept.
+      R"(\s*[(\[][^()\[\]]*\b(Remix(ed)?|RMX)\b[^()\[\]]*[)\]])", R"(\s+(Remix|RMX)(\s*\.?\s*\d+)?\s*$)"};
   std::vector<std::string> medley_separators = {"〜", "～", " / ", " - "};
 
   std::filesystem::path db_path() const { return data_dir / "eos.db"; }
