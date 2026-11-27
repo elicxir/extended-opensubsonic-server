@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -87,6 +88,9 @@ class Node {
   std::vector<Group> groups_;
   std::vector<ScalarList> scalar_lists_;
 };
+
+// The JSON value of one element (the same shape as inside a JSON response).
+nlohmann::ordered_json to_json_value(const Node& n);
 
 // `root` is the subsonic-response element.
 std::string to_json(const Node& root);

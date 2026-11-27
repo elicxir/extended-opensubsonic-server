@@ -73,6 +73,9 @@ struct Config {
   std::string transcode_default_format = "opus";
   int transcode_max_concurrent = 4;
 
+  // [estimate]
+  double estimate_auto_apply_min_confidence = 0;  // 0 = never apply LLM estimates unreviewed
+
   // [suggest]
   std::vector<std::string> derivative_patterns = {
       R"(\(?\s*TV\s*Size\s*\)?)", R"(\(?\s*(TV|Short)\s*(Ver\.?|Version|Edit)\s*\)?)",

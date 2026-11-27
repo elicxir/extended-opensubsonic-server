@@ -30,6 +30,8 @@ api::Request to_request(const drogon::HttpRequestPtr& req) {
   auto ctype = to_lower_ascii(req->getHeader("content-type"));
   if (req->method() == drogon::Post && ctype.starts_with("application/x-www-form-urlencoded"))
     api::parse_query(req->body(), r.params);  // formPost extension
+  else
+    r.body = std::string(req->body());
   for (const auto& [k, v] : req->getHeaders()) r.headers[to_lower_ascii(k)] = v;
   r.peer_ip = req->peerAddr().toIp();
   return r;
@@ -68,7 +70,7 @@ drogon::HttpResponsePtr to_drogon(const api::Response& r) {
 
 }  // namespace
 
-void run(api::Router& router, const std::string& listen, int threads, const std::string& scratch_dir) {
+void run(const std::vector<Route>& routes, const std::string& listen, int threads, const std::string& scratch_dir) {
   auto [host, port] = split_listen(listen);
   if (threads <= 0) threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
   auto& app = drogon::app();
@@ -79,15 +81,18 @@ void run(api::Router& router, const std::string& listen, int threads, const std:
       .setClientMaxBodySize(8 * 1024 * 1024)
       .setUploadPath(scratch_dir)
       .addListener(host, port);
-  app.registerHandlerViaRegex(
-      "/rest/.*",
-      [&router](const drogon::HttpRequestPtr& req, std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
-        auto request = to_request(req);
-        auto response = router.handle(request);
-        log::debug("{} {} -> {}", request.method, request.path, response.status);
-        cb(to_drogon(response));
-      },
-      {drogon::Get, drogon::Post, drogon::Head});
+  for (const auto& route : routes) {
+    app.registerHandlerViaRegex(
+        route.pattern,
+        [handler = route.handler](const drogon::HttpRequestPtr& req,
+                                  std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+          auto request = to_request(req);
+          auto response = handler(request);
+          log::debug("{} {} -> {}", request.method, request.path, response.status);
+          cb(to_drogon(response));
+        },
+        {drogon::Get, drogon::Post, drogon::Put, drogon::Patch, drogon::Delete, drogon::Head});
+  }
   log::info("listening on {}:{} ({} threads)", host, port, threads);
   app.run();
 }

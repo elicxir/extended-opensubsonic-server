@@ -23,6 +23,7 @@ struct Request {
   std::vector<std::pair<std::string, std::string>> params;  // query + form, in order
   std::map<std::string, std::string> headers;       // lower-case names
   std::string peer_ip;                               // TCP peer
+  std::string body;                                  // raw body (JSON for /ext)
 
   std::optional<std::string> param(std::string_view name) const;
   std::vector<std::string> params_all(std::string_view name) const;

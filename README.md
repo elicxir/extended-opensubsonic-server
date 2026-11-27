@@ -6,18 +6,26 @@ collections (works, compositions, arrangements, relations, virtual albums).
 - Requirements: https://claude.ai/artifact/YSMz59jZw56DzgCaJiT9Rt
 - Detailed design: https://claude.ai/artifact/NzgE1GsRzzUFN6cHbja7ce
 
-Status: **M3** — on top of M2's OpenSubsonic API:
+Status: **M4** — the `/ext` API on top of M3:
 
-- transcoding with ffmpeg (`format=opus|mp3`, `maxBitRate`, `timeOffset`)
-- data from custom tags: works (`COLLECTION_WORK`), folders (`COLLECTION`, album level,
-  `/` for nesting), virtual albums (`COLLECTION_ALBUM`), compositions and arrangements
-  (`WORK` / `MUSICBRAINZ_WORKID`, `ARRANGEMENT`, `ARRANGER`)
-- rule-based suggestions (same composition, performance variant, derivative, medley),
-  stored for review; accepting them comes with the `/ext` API in M4
-- `search3` on an FTS5 trigram index (Japanese partial matches, readings from sort tags)
-- `getIndexes` / `getMusicDirectory` browse the virtual folders
+- reading: folders, albums (physical / virtual), works and their songs, compositions with
+  arrangements, `/ext/songs/{id}/versions` (arrangements, performances, relations),
+  grouped search, suggestions, scan progress
+- editing (admins): relations, compositions, arrangements, works, folders, virtual albums,
+  song and album overrides; tag-made rows cannot be deleted (409 `tag_managed`), unlinking
+  them stores an exclusion instead
+- suggestions: accept (optionally edited), reject, batch; estimates from tools such as an
+  LLM via `POST /ext/suggestions`, applied at once above
+  `[estimate] auto_apply_min_confidence`; every link reports its `provenance`
+  (`manual`, `tag`, `rule`, `llm`) and `?includeEstimated=false` hides estimates
+- `POST /ext/auth/login` (password -> device API key), `/ext/apikeys`
+- `GET /ext/export` / `POST /ext/import`: manual data as JSON, re-matched by pid, audio MD5
+  and path when imported into a fresh database
 
-Virtual albums stay out of `/rest` album lists unless `[subsonic] virtual_albums = "show"`.
+Earlier milestones: transcoding (opus/mp3), custom tags (`COLLECTION_WORK`, `COLLECTION`,
+`COLLECTION_ALBUM`, `WORK`, `ARRANGEMENT`), rule-based suggestions, FTS5 search, virtual
+folders in `getIndexes` / `getMusicDirectory`. Virtual albums stay out of `/rest` album
+lists unless `[subsonic] virtual_albums = "show"`.
 
 Clients log in with a per-device API key (`eos-admin apikey create <user> <device>`) or
 with username and password (token auth). Plain `p=` passwords are off by default.

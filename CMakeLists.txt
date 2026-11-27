@@ -82,6 +82,14 @@ add_library(eoslib STATIC
   server/api/subsonic/h_playlists.cpp
   server/api/subsonic/h_queue.cpp
   server/api/subsonic/h_media.cpp
+  server/api/ext/router.cpp
+  server/api/ext/model.cpp
+  server/api/ext/suggestions.cpp
+  server/api/ext/h_read.cpp
+  server/api/ext/h_write.cpp
+  server/api/ext/h_suggest.cpp
+  server/api/ext/h_account.cpp
+  server/api/ext/h_transfer.cpp
   server/http/server.cpp
   ${EOS_MIGRATIONS_CPP})
 target_include_directories(eoslib PUBLIC ${CMAKE_SOURCE_DIR}/server)

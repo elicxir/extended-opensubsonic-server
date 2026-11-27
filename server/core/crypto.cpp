@@ -125,34 +125,30 @@ bool argon2id_verify(std::string_view password, std::string_view encoded) {
 
 Bytes aes_gcm_encrypt(const Bytes& key, std::string_view plaintext, std::string_view aad) {
   if (key.size() != 32) throw std::invalid_argument("AES-256-GCM needs a 32-byte key");
-  auto nonce = random_bytes(12);
+  // Layout: version(1) || nonce(12) || ciphertext(n) || tag(16), written in place.
+  Bytes out(1 + 12 + plaintext.size() + 16);
+  out[0] = kBlobVersion;
+  uint8_t* nonce = out.data() + 1;
+  uint8_t* cipher = out.data() + 13;
+  uint8_t* tag = cipher + plaintext.size();
+  if (RAND_bytes(nonce, 12) != 1) throw std::runtime_error("RAND_bytes failed");
   std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)> ctx(EVP_CIPHER_CTX_new(),
                                                                       &EVP_CIPHER_CTX_free);
-  Bytes out;
-  out.reserve(1 + 12 + plaintext.size() + 16);
-  out.push_back(kBlobVersion);
-  out.insert(out.end(), nonce.begin(), nonce.end());
   int len = 0;
-  if (EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, key.data(), nonce.data()) != 1)
+  if (EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, key.data(), nonce) != 1)
     throw std::runtime_error("EVP_EncryptInit_ex failed");
   if (!aad.empty() &&
       EVP_EncryptUpdate(ctx.get(), nullptr, &len, reinterpret_cast<const unsigned char*>(aad.data()),
                         static_cast<int>(aad.size())) != 1)
     throw std::runtime_error("EVP_EncryptUpdate(aad) failed");
-  Bytes cipher(plaintext.size() + 16);
-  if (EVP_EncryptUpdate(ctx.get(), cipher.data(), &len,
-                        reinterpret_cast<const unsigned char*>(plaintext.data()),
+  if (EVP_EncryptUpdate(ctx.get(), cipher, &len, reinterpret_cast<const unsigned char*>(plaintext.data()),
                         static_cast<int>(plaintext.size())) != 1)
     throw std::runtime_error("EVP_EncryptUpdate failed");
-  int total = len;
-  if (EVP_EncryptFinal_ex(ctx.get(), cipher.data() + total, &len) != 1)
+  int final_len = 0;  // GCM is a stream mode: nothing is held back
+  if (EVP_EncryptFinal_ex(ctx.get(), cipher + len, &final_len) != 1)
     throw std::runtime_error("EVP_EncryptFinal_ex failed");
-  total += len;
-  out.insert(out.end(), cipher.begin(), cipher.begin() + total);
-  uint8_t tag[16];
   if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, 16, tag) != 1)
     throw std::runtime_error("GCM get tag failed");
-  out.insert(out.end(), tag, tag + 16);
   return out;
 }
 

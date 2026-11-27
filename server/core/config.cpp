@@ -97,6 +97,12 @@ Config parse_config(std::string_view text) {
         static_cast<int>((*tc)["max_concurrent"].value_or(int64_t{cfg.transcode_max_concurrent}));
   }
 
+  if (auto est = root["estimate"].as_table()) {
+    if (auto v = (*est)["auto_apply_min_confidence"].value<double>()) cfg.estimate_auto_apply_min_confidence = *v;
+    else if (auto vi = (*est)["auto_apply_min_confidence"].value<int64_t>())
+      cfg.estimate_auto_apply_min_confidence = static_cast<double>(*vi);
+  }
+
   if (auto sg = root["suggest"].as_table()) {
     if ((*sg)["derivative_patterns"])
       cfg.derivative_patterns = string_array((*sg)["derivative_patterns"].node(), "suggest.derivative_patterns");
