@@ -19,6 +19,12 @@
 namespace eos::api::ext {
 namespace {
 
+// A person a proposal names: made when new. One the library already knows keeps the
+// name its tags (or a person) gave it; a proposal may spell it differently.
+void ensure_artist(db::Connection& w, const scanner::Person& p) {
+  if (!w.scalar_int("SELECT 1 FROM artist WHERE id = ?", scanner::artist_id(p.name))) scanner::upsert_artist(w, p);
+}
+
 using njson = nlohmann::json;
 
 const std::set<std::string> kRelationTypes = {"medley", "quote", "derivative", "cover", "related"};
@@ -176,7 +182,7 @@ class ArrangementPicker {
       int pos = 0;
       for (const auto& n : arrangers) {
         scanner::Person person{n, "", "", ""};
-        scanner::upsert_artist(w_, person);
+        ensure_artist(w_, person);
         w_.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
             "suggestion_id) VALUES ('arrangement', ?, ?, 'arranger', '', ?, ?, ?)",
@@ -211,14 +217,52 @@ class ArrangementPicker {
   std::map<std::string, std::string> by_arrangers_;
 };
 
+// Links each track at `source`, replacing its link of that source. The arrangements the
+// tracks leave are added to `left` (see prune_left).
 void link_tracks(db::Connection& w, const njson& tracks, const std::function<std::string(const std::string&)>& arrangement,
-                 int source, const std::optional<std::string>& sugg) {
+                 int source, const std::optional<std::string>& sugg, std::set<std::string>& left) {
   for (const auto& t : tracks) {
     auto id = t.get<std::string>();
+    auto target = arrangement(id);
+    if (auto before = w.scalar_text("SELECT arrangement_id FROM track_arrangement WHERE track_id = ? AND source = ?",
+                                    id, source);
+        before && *before != target)
+      left.insert(*before);
     w.run(
         "INSERT OR REPLACE INTO track_arrangement (track_id, arrangement_id, source, suggestion_id) "
         "VALUES (?, ?, ?, ?)",
-        id, arrangement(id), source, sugg);
+        id, target, source, sugg);
+  }
+}
+
+// After an estimate moved tracks away: an estimated (source 1) arrangement with no track
+// left is removed, and so is its estimated composition once it has no arrangement, no
+// relation and nobody's preferred version. Otherwise an accepted suggestion that moves
+// songs on (e.g. MusicBrainz after a title match) leaves an empty shell behind.
+void prune_left(db::Connection& w, const std::set<std::string>& left) {
+  std::set<std::string> comps;
+  for (const auto& arr : left) {
+    auto comp = w.scalar_text(
+        "SELECT composition_id FROM arrangement WHERE id = ?1 AND source = 1 "
+        "AND NOT EXISTS (SELECT 1 FROM track_arrangement WHERE arrangement_id = ?1)",
+        arr);
+    if (!comp) continue;
+    w.run("DELETE FROM participant WHERE entity_type = 'arrangement' AND entity_id = ?", arr);
+    w.run("DELETE FROM arrangement WHERE id = ?", arr);
+    comps.insert(*comp);
+  }
+  for (const auto& comp : comps) {
+    if (!w.scalar_int(
+            "SELECT 1 FROM composition c WHERE c.id = ?1 AND c.source = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM arrangement WHERE composition_id = ?1) "
+            "AND NOT EXISTS (SELECT 1 FROM relation WHERE (from_type = 'composition' AND from_id = ?1) "
+            "  OR (to_type = 'composition' AND to_id = ?1)) "
+            "AND NOT EXISTS (SELECT 1 FROM preferred_version WHERE composition_id = ?1)",
+            comp))
+      continue;
+    w.run("DELETE FROM participant WHERE entity_type = 'composition' AND entity_id = ?", comp);
+    w.run("DELETE FROM field_override WHERE entity_type = 'composition' AND entity_id = ?", comp);
+    w.run("DELETE FROM composition WHERE id = ?", comp);
   }
 }
 
@@ -226,14 +270,16 @@ void link_tracks(db::Connection& w, const njson& tracks, const std::function<std
 
 json suggestion_json(db::Connection& db, const std::string& id) {
   auto st = db.prepare(
-      "SELECT id, rule, method, model, score, status, created_at, decided_at, payload, evidence FROM suggestion "
-      "WHERE id = ?");
+      "SELECT id, rule, method, model, score, status, created_at, decided_at, payload, evidence, origin, origin_ref "
+      "FROM suggestion WHERE id = ?");
   st.bind(1, id);
   if (!st.step()) throw not_found("Suggestion not found");
   auto payload = njson::parse(st.text(8));
   json j = {{"id", st.text(0)},
             {"rule", st.text(1)},
             {"method", st.text(2)},
+            {"origin", st.opt_text(10) ? json(*st.opt_text(10)) : json(nullptr)},
+            {"originRef", st.opt_text(11) ? json(*st.opt_text(11)) : json(nullptr)},
             {"model", st.opt_text(3) ? json(*st.opt_text(3)) : json(nullptr)},
             {"score", st.real(4)},
             {"status", st.text(5)},
@@ -302,15 +348,48 @@ void validate_proposal(db::Connection& db, const njson& p) {
   }
 }
 
+namespace {
+
+// The estimated rows a suggestion wrote take its origin, so that it stays with them
+// (in exports too) whatever becomes of the suggestion.
+void stamp_origin(db::Connection& w, const std::string& sid) {
+  if (sid.empty()) return;
+  for (const char* table : {"track_arrangement", "track_title", "relation", "participant", "album_track", "album_folder"})
+    w.run(std::string("UPDATE ") + table +
+              " SET (origin, origin_ref) = (SELECT origin, origin_ref FROM suggestion WHERE id = ?1) "
+              "WHERE suggestion_id = ?1 AND source = 1 AND origin IS NULL",
+          sid);
+}
+
+void apply_rows(db::Connection& w, const njson& p, int source, const std::string& sid);
+
+}  // namespace
+
 void apply_proposal(db::Connection& w, const njson& p, int source, const std::string& sid) {
+  apply_rows(w, p, source, sid);
+  stamp_origin(w, sid);
+}
+
+namespace {
+
+void apply_rows(db::Connection& w, const njson& p, int source, const std::string& sid) {
   validate_proposal(w, p);
   const auto action = p["action"].get<std::string>();
   const auto now = db::now_ms();
   const auto sugg = opt(sid);
+  std::set<std::string> left;  // arrangements tracks were moved out of
   if (action == "merge_arrangements") {
     const std::string arrangement = p["arrangementId"];
-    link_tracks(w, p["tracks"], [&](const std::string&) { return arrangement; }, source, sugg);
+    link_tracks(w, p["tracks"], [&](const std::string&) { return arrangement; }, source, sugg, left);
   } else if (action == "link_composition") {
+    // Groups songs that had no composition when the suggestion was made (same title and
+    // composer). A song linked since then, say by MusicBrainz, keeps that link: a title
+    // match is weaker evidence. With no song left there is nothing to do.
+    njson tracks = njson::array();
+    for (const auto& t : p["tracks"])
+      if (!w.scalar_int("SELECT 1 FROM track_arrangement_eff WHERE track_id = ?", t.get<std::string>()))
+        tracks.push_back(t);
+    if (tracks.empty()) return;
     std::string comp = p.contains("compositionId") && p["compositionId"].is_string() ? p["compositionId"].get<std::string>()
                                                                                     : std::string();
     if (comp.empty()) {
@@ -325,7 +404,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
         for (const auto& n : p["composers"]) composers.push_back({n.get<std::string>(), "", "", ""});
       int pos = 0;
       for (const auto& person : composers) {
-        scanner::upsert_artist(w, person);
+        ensure_artist(w, person);
         w.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, "
             "source, suggestion_id) VALUES ('composition', ?, ?, 'composer', '', ?, ?, ?)",
@@ -333,7 +412,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
       }
     }
     ArrangementPicker pick(w, comp, source, sugg, now);
-    link_tracks(w, p["tracks"], [&](const std::string& t) { return pick.for_track(t); }, source, sugg);
+    link_tracks(w, tracks, [&](const std::string& t) { return pick.for_track(t); }, source, sugg, left);
   } else if (action == "relation") {
     insert_relation(w, p["from"], p["to"], p["type"], p.value("subtype", njson()), p.value("position", njson()),
                     p.value("note", njson()), source, sid);
@@ -377,7 +456,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
       int pos = 0;
       for (const auto& n : cj.value("composers", njson::array())) {
         scanner::Person person{n.get<std::string>(), "", "", ""};
-        scanner::upsert_artist(w, person);
+        ensure_artist(w, person);
         w.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
             "suggestion_id) VALUES ('composition', ?, ?, 'composer', '', ?, ?, ?)",
@@ -389,7 +468,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
     // originalTracks: the versions the others arrange, to the implicit original.
     if (p.contains("originalTracks")) {
       ArrangementPicker originals(w, comp, source, sugg, now);
-      link_tracks(w, p["originalTracks"], [&](const std::string&) { return originals.implicit(); }, source, sugg);
+      link_tracks(w, p["originalTracks"], [&](const std::string&) { return originals.implicit(); }, source, sugg, left);
     }
     // Arrangement: the implicit original when no name is given, else found or made by name.
     const njson aj = p.value("arrangement", njson());
@@ -398,7 +477,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
     if (!named) {
       // No arrangement named: each track to the original, or to its arrangers' arrangement.
       ArrangementPicker pick(w, comp, source, sugg, now);
-      link_tracks(w, p["tracks"], [&](const std::string& t) { return pick.for_track(t); }, source, sugg);
+      link_tracks(w, p["tracks"], [&](const std::string& t) { return pick.for_track(t); }, source, sugg, left);
     } else {
       std::string arrangement;
       auto name = aj["name"].get<std::string>();
@@ -415,14 +494,14 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
         int pos = 0;
         for (const auto& n : aj.value("arrangers", njson::array())) {
           scanner::Person person{n.get<std::string>(), "", "", ""};
-          scanner::upsert_artist(w, person);
+          ensure_artist(w, person);
           w.run(
               "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
               "suggestion_id) VALUES ('arrangement', ?, ?, 'arranger', '', ?, ?, ?)",
               arrangement, scanner::artist_id(person.name), pos++, source, sugg);
         }
       }
-      link_tracks(w, p["tracks"], [&](const std::string&) { return arrangement; }, source, sugg);
+      link_tracks(w, p["tracks"], [&](const std::string&) { return arrangement; }, source, sugg, left);
     }
   } else if (action == "virtual_album") {
     auto name = p["name"].get<std::string>();
@@ -445,6 +524,9 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
           album, t.get<std::string>(), ++n, source, sugg);
     scanner::finish_custom(w, now);
   }
+  prune_left(w, left);
 }
+
+}  // namespace
 
 }  // namespace eos::api::ext

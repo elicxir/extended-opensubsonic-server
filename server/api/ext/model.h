@@ -11,9 +11,18 @@ namespace eos::api::ext {
 // "manual" (3), "tag" (2), or for estimates (1) the method of the suggestion that made
 // the row ("rule" / "llm").
 std::string provenance(int64_t source, const std::optional<std::string>& method);
+// What a link rests on (docs/link-origin.md): tag and manual rows are their source;
+// estimated rows say external, audio, name or llm, or nothing when not known.
+std::optional<std::string> origin_of(int64_t source, const std::optional<std::string>& origin);
+// The origins a suggestion may give (estimates only).
+bool valid_origin(const std::string& origin);
+// Where a link came from, as the fields of its JSON: provenance, and when known
+// confidence, rule, origin and originRef. Columns from `col` on: the suggestion's score
+// and rule, then the row's origin and origin_ref (each NULL when none).
+json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col);
 
 // Songs as OpenSubsonic Child objects plus compositionId, arrangementId,
-// arrangementProvenance, titleIds, virtualAlbumIds, performanceKind, recordedDate.
+// arrangementProvenance, variationCount, titleIds, virtualAlbumIds, performanceKind, recordedDate.
 json songs(ExtCtx& c, const std::vector<std::string>& ids);
 // Albums as AlbumID3 plus kind and source.
 json albums(ExtCtx& c, const std::vector<std::string>& ids);

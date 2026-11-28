@@ -17,14 +17,21 @@ Groups that land on the same work become one composition, so titles in different
 languages ("Bloody Tears" / 「血の涙」) are joined when MusicBrainz lists one as an
 alias of the other.
 
+A release with very many tracks comes back from MusicBrainz without the works of its
+recordings; its recordings are then asked for one by one.
+
 Only the standard library is used. MusicBrainz is asked at most once per second.
+With --cache DIR (or EOS_MB_CACHE) every answer is kept in that folder and a question
+asked before is answered from it, so a second run does not go to MusicBrainz again;
+--refresh asks again and replaces what is kept.
 The server and API key come from --server / --key or EOS_SERVER / EOS_API_KEY.
 
   mb_match.py [--server URL] [--key eos_...] [--album TEXT ...] [--dry-run]
-              [--aliases [--alias-title TEXT ...]]
+              [--aliases [--alias-title TEXT ...]] [--cache DIR [--refresh]]
 """
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -37,25 +44,59 @@ import urllib.request
 MB = "https://musicbrainz.org/ws/2"
 USER_AGENT = "eos-mb-match/0.1 (experimental)"
 _last_request = 0.0
+_cache_dir = None   # --cache: answers are kept here, one file per question
+_refresh = False    # --refresh: ask again even when an answer is kept
 
 
 def mb_get(path, **params):
+    """One question to MusicBrainz, answered from the cache when it was asked before."""
+    params["fmt"] = "json"
+    url = f"{MB}/{path}?{urllib.parse.urlencode(params)}"
+    if not _cache_dir:
+        return mb_fetch(url)
+    kept = os.path.join(_cache_dir, hashlib.sha1(url.encode()).hexdigest() + ".json")
+    if not _refresh and os.path.exists(kept):
+        with open(kept, encoding="utf-8") as f:
+            return json.load(f)["answer"]
+    answer = mb_fetch(url)
+    os.makedirs(_cache_dir, exist_ok=True)
+    with open(kept + ".part", "w", encoding="utf-8") as f:
+        json.dump({"url": url, "fetched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "answer": answer},
+                  f, ensure_ascii=False)
+    os.replace(kept + ".part", kept)
+    return answer
+
+
+def mb_fetch(url):
     global _last_request
     wait = 1.1 - (time.time() - _last_request)
     if wait > 0:
         time.sleep(wait)
-    params["fmt"] = "json"
-    url = f"{MB}/{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in range(3):
+    attempts = 8
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 _last_request = time.time()
                 return json.load(r)
         except urllib.error.HTTPError as e:
             _last_request = time.time()
-            if e.code == 503 and attempt < 2:  # rate limited
-                time.sleep(2)
+            # 503: rate limited or briefly unavailable. Back off 2, 4, 8 ... s (at most a
+            # minute, never less than Retry-After) instead of losing the whole run: a
+            # throttled client keeps getting "Retry-After: 1" if it obeys it to the letter.
+            if e.code in (502, 503, 504) and attempt < attempts - 1:
+                retry_after = e.headers.get("Retry-After", "")
+                delay = max(int(retry_after) if retry_after.isdigit() else 0, min(60, 2 ** (attempt + 1)))
+                print(f"  MusicBrainz answered {e.code}; trying again in {delay} s", file=sys.stderr, flush=True)
+                time.sleep(delay)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:  # no answer at all
+            _last_request = time.time()
+            if attempt < attempts - 1:
+                delay = min(60, 2 ** (attempt + 1))
+                print(f"  MusicBrainz did not answer ({e}); trying again in {delay} s", file=sys.stderr, flush=True)
+                time.sleep(delay)
                 continue
             raise
 
@@ -125,6 +166,23 @@ def pair_tracks(songs, release):
     return pairs, mismatched
 
 
+def fill_recording_works(pairs, label):
+    """A release with very many tracks comes back without the relationships of its
+    recordings (MusicBrainz leaves them out; a release of 409 tracks had them, one of 568
+    had none). Then each paired recording is asked for by itself. Returns how many."""
+    tracks = list(pairs.values())
+    if not tracks or any("relations" in t["recording"] for t in tracks):
+        return 0
+    print(f"  … {label}: the release came without works; asking for its {len(tracks)} recordings one by one",
+          flush=True)
+    for i, t in enumerate(tracks, 1):
+        rec = mb_get(f"recording/{t['recording']['id']}", inc="work-rels+work-level-rels+artist-rels")
+        t["recording"]["relations"] = rec.get("relations", [])
+        if i % 100 == 0:
+            print(f"    {i}/{len(tracks)}", flush=True)
+    return len(tracks)
+
+
 def works_of(track):
     rec = track["recording"]
     return [r["work"] for r in rec.get("relations", []) if r.get("type") == "performance" and "work" in r]
@@ -189,7 +247,12 @@ def main():
                     help="also look up left-over tracks by title among work names and aliases")
     ap.add_argument("--alias-title", action="append", default=[],
                     help="with --aliases, only titles that contain this (one MusicBrainz query per title)")
+    ap.add_argument("--cache", default=os.environ.get("EOS_MB_CACHE"), metavar="DIR",
+                    help="keep MusicBrainz's answers in this folder and reuse them (or EOS_MB_CACHE)")
+    ap.add_argument("--refresh", action="store_true", help="with --cache, ask again and replace what is kept")
     args = ap.parse_args()
+    global _cache_dir, _refresh
+    _cache_dir, _refresh = args.cache, args.refresh
     if not args.key:
         sys.exit("an API key is needed: --key or EOS_API_KEY")
     eos = Eos(args.server, args.key)
@@ -217,6 +280,7 @@ def main():
         release = mb_get(f"release/{found['id']}",
                          inc="recordings+recording-level-rels+work-rels+work-level-rels+artist-rels")
         pairs, mismatched = pair_tracks(songs, release)
+        fill_recording_works(pairs, album["name"])
         stats["albums_matched"] += 1
         stats["tracks_paired"] += len(pairs)
         stats["duration_mismatch"] += mismatched
@@ -312,6 +376,9 @@ def main():
                     proposal["arrangement"]["arrangers"] = work_info[w]["arrangers"]
             proposals.append({
                 "rule": "musicbrainz_arrangement" if len(works_with_tracks) > 1 else "musicbrainz_work",
+                # MusicBrainz itself says these recordings are of this work.
+                "origin": "external",
+                "originRef": f"https://musicbrainz.org/work/{w}",
                 "model": "musicbrainz",
                 "score": 0.95,
                 "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{x}" for x in sorted(members)],
@@ -332,7 +399,9 @@ def main():
                 by_parent.setdefault(p, []).append(t)
         for (pid, ptitle), tracks in by_parent.items():
             if len(tracks) >= args.min_tracks:
-                proposals.append({"rule": "musicbrainz_parts", "model": "musicbrainz", "score": 0.9,
+                proposals.append({"rule": "musicbrainz_parts", "origin": "external",
+                                  "originRef": f"https://musicbrainz.org/work/{pid}",
+                                  "model": "musicbrainz", "score": 0.9,
                                   "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{pid}"]},
                                   "proposal": {"action": "link_title", "titleName": ptitle, "tracks": tracks}})
 
@@ -411,6 +480,9 @@ def by_alias(songs, covered, args):
             composition["composers"] = people(w, "composer")
         proposals.append({
             "rule": "musicbrainz_alias",
+            # Our titles match the work's names: MusicBrainz does not say these are its recordings.
+            "origin": "name",
+            "originRef": f"https://musicbrainz.org/work/{wid}",
             "model": "musicbrainz",
             "score": 0.85 if len(titles) > 1 else 0.8,
             "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{wid}"],

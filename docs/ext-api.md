@@ -32,6 +32,7 @@
   | --- | --- |
   | `compositionId`、`arrangementId` | 曲が属する楽曲と編曲（ないときは `null`） |
   | `arrangementProvenance` | その紐付けの出どころ（`manual`・`tag`・`rule`・`llm`） |
+  | `variationCount` | 同じ楽曲の、この曲以外の曲の数（編曲違いと演奏違い。関係でつながった曲は数えません）。楽曲が決まっていない曲は 0 |
   | `titleIds` | 曲が属する作品 |
   | `virtualAlbumIds` | 曲が入っている仮想アルバム |
   | `performanceKind`、`recordedDate` | 演奏の種類（`live`・`studio`）と収録日 |
@@ -45,7 +46,7 @@
 
 | メソッドとパス | 返すもの |
 | --- | --- |
-| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features`（グラフがあれば `graph` を含みます） |
+| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features`（グラフがあれば `graph`、曲の詳細があれば `songDetail` を含みます） |
 | `GET /ext/scan` | `scanning`、`phase`、`count`、`folderCount`、`last`（直近のスキャンの件数） |
 | `GET /ext/folders` | 全フォルダの平らな一覧（`id`、`name`、`parentId`、`sortOrder`、`albumCount`、`childCount`、`provenance`）。木はクライアントが組みます |
 | `GET /ext/folders/{id}` | `folder`、`children`（直下のフォルダ）、`albums` |
@@ -58,6 +59,7 @@
 | `GET /ext/compositions/{id}` | `composition`（作曲者付き）、`arrangements`（`{"arrangement", "songs"}`）、`relations` |
 | `GET /ext/songs/{id}` | 曲 |
 | `GET /ext/songs/{id}/versions` | 下記 |
+| `GET /ext/songs/{id}/detail` | 下記。曲の詳細（紐付いているものの名前と出どころ、ファイル、タグ） |
 | `GET /ext/search?q=` | 下記 |
 | `GET /ext/graph?seed=` | 下記。関連する曲のグラフ（節と辺） |
 | `GET /ext/suggestions?status=&rule=&method=` | 候補の一覧。`status` の既定は `pending`。確信度の高い順 |
@@ -85,6 +87,34 @@
 - `performances`：同じ編曲の、この曲以外の曲。
 - `related`：この曲と、この曲の楽曲に付いた関係。`direction` は、この曲（または楽曲）が `from` 側なら `out`、`to` 側なら `in`。`target` は相手で、曲なら `song`、楽曲なら `composition`。
 
+### `GET /ext/songs/{id}/detail`
+
+曲の詳細画面のための呼び出しです。その曲について分かっていることを 1 回で返します。同じ楽曲のほかの曲は返しません（`versions` を使います）。
+
+```json
+{
+  "song": { "id": "…", "title": "…", "compositionId": "c1", "arrangementId": "a2", … },
+  "album": { "id": "…", "name": "…", "kind": "physical", "provenance": "tag", … },
+  "composition": { "id": "c1", "name": "…", "composers": [{"id": "…", "name": "…"}], "provenance": "tag" },
+  "arrangement": { "id": "a2", "name": "Piano Ver.", "kind": "piano", "isImplicit": false, "arrangers": [ … ], "provenance": "tag" },
+  "arrangementLink": { "provenance": "rule", "confidence": 0.9, "rule": "same_composition", "origin": "name" },
+  "titles": [ { "title": { "id": "…", "name": "Game X", "kind": null, "year": null, "provenance": "tag" }, "link": { "provenance": "tag", "origin": "tag" } } ],
+  "virtualAlbums": [ { "album": { "id": "…", "name": "…", "kind": "virtual", … }, "link": { "provenance": "tag", "origin": "tag" },
+                       "discNumber": null, "trackNumber": 2 } ],
+  "file": { "library": "Music", "path": "Box/02.flac", "size": 12345678, "modified": "…", "added": "…", "updated": "…",
+            "audioMd5": "…", "hasEmbeddedArt": true, "musicBrainzRecordingId": null, "musicBrainzTrackId": null },
+  "tags": { "TITLE": ["…"], "ARTIST": ["…", "…"] }
+}
+```
+
+- `album`：曲の物理アルバム。
+- `composition`、`arrangement`、`arrangementLink`：曲が入っている編曲と、その楽曲。楽曲が決まっていない曲では 3 つとも `null`。
+- `arrangementLink`、`titles[].link`、`virtualAlbums[].link`：その紐付けの出どころ。`provenance` は必ずあり、推定のときは `confidence`（候補の確信度）と `rule`、分かっていれば `origin` と `originRef` が付きます（`/ext/graph` の辺と同じ項目）。`arrangement.provenance` は編曲そのものの出どころで、この曲との紐付けの出どころとは別です。
+- `titles`：曲が属する作品（読みの順）。`virtualAlbums`：曲を含む仮想アルバム（読みの順）と、その中でのディスク番号と曲番号（決まっていなければ `null`）。どちらも、なければ空の配列。
+- `file`：`path` はライブラリ（`library`）のフォルダからの相対パス。`added` は曲が最初にスキャンされた時刻、`updated` は最後に読み直した時刻、`modified` はファイルの更新時刻。`audioMd5` は FLAC の音声の MD5（ほかの形式では `null`）。
+- `tags`：ファイルのタグそのまま。キーは大文字、値は文字列の配列（ファイルの中の順）。手作業の上書きは `song` に反映され、`tags` には反映されません。
+- `includeEstimated=false` を付けると、推定の紐付けを除いて答えます。
+
 ### `GET /ext/search?q=`
 
 `compositions`（`{"composition", "songs"}`、全編曲の曲）、`titles`（`{"title", "songCount", "songs"}`、先頭 10 曲）、`songs`、`albums`（仮想も含む）、`artists` を返します。楽曲のまとまりに入った曲は `songs` に重ねて出しません。`limit` で各種類の件数を変えられます（既定 20）。
@@ -105,6 +135,7 @@
 | `limit` | 節の上限（1〜1000）。中心に近い節から残します | 200 |
 | `fanout` | 中心以外の節は、相手がこの数より多いと開きません（1〜1000） | 50 |
 | `includeEstimated` | `false` で推定の紐付けを除きます | `true` |
+| `origin` | つながりを出所（`origin`、下記）で絞ります（`,` 区切り）。例：`external,tag,manual` で、外部 DB が書いているものとタグと手作業だけ。出所のわからない推定は残りません。`similar` の辺は常に残ります。知らない語は 400 | 絞らない |
 | `similarKind` | `similar` の辺に使う類似度の種類（`GET /ext/similarity`）。保存されていない種類は 400 です | `audio_embed` |
 | `similarK` | `similar` の辺を、1 曲あたり点数の高い順に何本まで出すか（1〜50） | 5 |
 | `similarMinScore` | これより点数の低い `similar` の辺は出しません | なし |
@@ -151,7 +182,8 @@
 | `album` | 曲 → アルバム | `virtual`（仮想アルバムなら `true`） |
 | `similar` | 曲 — 曲（向きなし。`from` は相手を選んだ側） | `kind`、`score`（尺度は種類ごと）。`provenance` は `computed` |
 
-- どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` も付きます。
+- どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` と、それを作った候補の規則 `rule`（`musicbrainz_work`・`same_composition` など）も付きます。
+- `origin`：つながりが何に基づくか（[link-origin.md](link-origin.md)）。`tag`（タグ）、`manual`（手作業）、推定なら `external`（外部 DB がそのつながりを書いている）・`audio`（音の解析）・`name`（名前の一致）・`llm`（言語モデルの推測）。出所のわからない推定（006 より前に作られ、候補の見つからない行など）には付きません。推定には `originRef`（根拠を確かめられる先。MusicBrainz の URL など）が付くことがあります。
 - 辺は、応答に入った節どうしのものを全部返します（端の節どうしの辺も含みます）。
 - `truncated`：`limit` に達して、たどるのをやめたときに `true`。
 - 人物やアルバムは相手が数百になるので、`include` に書いたときだけたどります。書いても、`fanout` を超える節は開かずに `degree` だけ返します。
@@ -183,7 +215,7 @@
 | `DELETE /ext/folders/{id}` | | タグ由来は 409。下位フォルダも消えます |
 | `PATCH /ext/albums/{id}/folders` | `add?`、`remove?`（フォルダ ID） | |
 | `POST /ext/albums` | `name`、`sortName?`、`albumArtist?`、`tracks?`（曲 ID の配列、この順） | 仮想アルバムを作ります |
-| `PATCH`（または `PUT`）`/ext/albums/{id}` | `name?`、`sortName?` | 上書き。`null` で上書きを消してタグの値に戻します |
+| `PATCH`（または `PUT`）`/ext/albums/{id}` | `name?`、`sortName?`、`cover?`、`albumArtists?` | 上書き。`null` で上書きを消してタグの値に戻します。`cover` は、ライブラリの中の画像ファイル（ライブラリのルートからの相対パス）をそのアルバムの絵にします（ライブラリの外や画像でないものは 400、`null` で元に戻す）。`albumArtists`（名前の配列、主要な順）は仮想アルバムだけ（物理は 409）で、表示名は ` / ` でつなぎます。仮想アルバムの絵は、`cover` がなければ先頭の曲の絵です |
 | `DELETE /ext/albums/{id}` | | 手作業の仮想アルバムだけ。物理アルバムとタグ由来の仮想アルバムは 409 |
 | `PATCH /ext/albums/{id}/tracks` | `add?`（曲 ID か `{"id", "disc", "track"}`）、`remove?` | 仮想アルバムだけ（物理は 409） |
 | `PATCH /ext/songs/{id}` | `title?`、`sortTitle?`、`subtitle?` | 上書き。`null` でタグの値に戻します。検索にもすぐ反映されます |
@@ -205,7 +237,7 @@
 
 ```json
 {
-  "id": "…", "rule": "derivative", "method": "rule", "model": null, "score": 1.0,
+  "id": "…", "rule": "derivative", "method": "rule", "origin": "name", "originRef": null, "model": null, "score": 1.0,
   "status": "pending", "createdAt": "…", "decidedAt": null,
   "summary": "「Main Theme (TV Size) (Box)」→「Main Theme (Box)」: derivative（tv_size）",
   "targets": [{"type": "track", "id": "…", "name": "…"}],
@@ -215,6 +247,7 @@
 ```
 
 - `status`：`pending`、`accepted`、`auto_applied`、`rejected`、`stale`（タグや手作業で同じ情報が入って不要になった）。
+- `origin`：候補が何に基づくか（`external`・`audio`・`name`・`llm`）。サーバーの規則はどれも `name` です。承認すると、候補が書いた推定の行に `origin` と `originRef` が写り、候補とは別に残ります（書き出しにも入ります）。
 - `rule` の規則（サーバーがスキャンのたびに出すもの）：
 
   | 規則 | 条件 |
@@ -253,12 +286,14 @@
 ```json
 {"suggestions": [
   {"rule": "title", "model": "モデル名", "score": 0.95,
+   "origin": "external", "originRef": "https://musicbrainz.org/work/…",
    "evidence": {"reason": "…", "urls": ["https://…"]},
    "proposal": {"action": "link_title", "titleName": "Game Z", "tracks": ["…"]}}
 ]}
 ```
 
 - `method` は `llm` として保存します。`score` は確信度（0〜1）です。
+- `origin`（任意）は、推定が何に基づくかです：`external`（外部 DB が、そのつながりを直接書いている）、`audio`（音の解析）、`name`（名前の一致。外部 DB の名前や別名と照らした場合も含む）、`llm`（言語モデルの推測。省略したとき）。ほかの語は、その 1 件のエラーです。`originRef`（任意）は根拠を確かめられる先（URL など）です。
 - 1 件ずつ確かめて保存します。不正な 1 件は `errors` に入り、他は登録されます。
 - 同じ推定（規則名と `proposal` が同じ）は `skipped` になります。却下済みのものも含みます。
 - 設定 `estimate.auto_apply_min_confidence` が 0 より大きく、`score` がそれ以上なら、その場で推定（1）として取り込み、`auto_applied` にします。
@@ -313,6 +348,28 @@
 - 応答：`{"kind", "pairCount", "skipped", "trackCount"}`
 - 一覧の 1 件：`{"kind", "model", "params", "trackCount", "pairCount", "createdAt"}`（`createdAt` は UNIX ミリ秒）
 - 曲が削除される（`purge`）と、その曲の組も消えます。`missing` の曲の組は残ります。
+
+## アーティストの画像
+
+アーティストの写真やロゴを、出どころと一緒に保存します。サーバーは画像を自分では探しません。手作業か、候補を探すツールが登録します。配信は `/rest/getCoverArt`（`id` はアーティストの `coverArt`）です。
+
+| メソッドとパス | 本文 | 説明 |
+| --- | --- | --- |
+| `GET /ext/artists` | | 全アーティストの一覧（`items`、読みの順）：`id`、`name`、`sortName`、`musicBrainzId`、`roles`（`albumartist`・`artist`・`composer` など）、画像があれば `coverArt`。`getArtists` はアルバムアーティストだけなので、作曲者や演奏者はここで探します |
+| `GET /ext/artist-images` | | 画像のあるアーティストの一覧（`items`、読みの順） |
+| `GET /ext/artists/{id}/image` | | 画像の情報。画像がなければ 404 |
+| `PUT /ext/artists/{id}/image`（管理者） | `data`（画像を base64 で）、`sourceUrl?`、`license?`、`credit?` | 画像を置き換える。JPEG・PNG・GIF・WebP、10 MB まで |
+| `DELETE /ext/artists/{id}/image`（管理者） | | 画像を消す |
+
+```json
+{ "artistId": "…", "coverArt": "ar-…_1795870683", "mime": "image/jpeg", "size": 183422,
+  "sourceUrl": "https://commons.wikimedia.org/wiki/File:…", "license": "CC BY-SA 4.0", "credit": "…", "updated": "…" }
+```
+
+- 画像は送られたまま保存し、`getCoverArt` の `size` に合わせて縮めます（ほかのジャケットと同じキャッシュ）。
+- `sourceUrl`・`license`・`credit` は表示と再配布のための控えです。サーバーは中身を確かめません。
+- 画像は書き出し（`/ext/export`）に入りません。データベースのバックアップには入ります。
+- `/ext/info` の `features` に `artistImages` があれば使えます。
 
 ## WebSocket
 

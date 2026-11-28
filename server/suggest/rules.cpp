@@ -56,6 +56,7 @@ struct Track {
   std::string id, title, album_id, base, arrangement, composition;
   int64_t duration_ms = 0;
   std::set<std::string> composers, arrangers, performers, titles;
+  std::map<std::string, std::string> composer_names;  // normalized -> as the tags write it
   std::optional<std::string> derivative;
 };
 
@@ -133,7 +134,10 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
       auto& t = tracks[it->second];
       auto role = st.text(1);
       auto name = normalize(st.text(2));
-      if (role == "composer") t.composers.insert(name);
+      if (role == "composer") {
+        t.composers.insert(name);
+        t.composer_names.emplace(name, st.text(2));
+      }
       else if (role == "arranger") t.arrangers.insert(name);
       else t.performers.insert(name);
     }
@@ -167,10 +171,13 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
     if (members.size() < 2 && !existing) continue;
     json ids = json::array();
     for (auto* m : members) ids.push_back(m->id);
+    // The names as written: accepting the suggestion must not rename anybody to the
+    // normalized form the groups are keyed by.
+    std::vector<std::string> composers;
+    for (const auto& n : members.front()->composers) composers.push_back(members.front()->composer_names.at(n));
     json payload = {{"action", "link_composition"},
                     {"name", strip(members.front()->title, patterns)},
-                    {"composers", std::vector<std::string>(members.front()->composers.begin(),
-                                                           members.front()->composers.end())},
+                    {"composers", composers},
                     {"tracks", ids}};
     if (existing) payload["compositionId"] = *existing;
     Candidate cand{"same_composition", fp("same_composition|" + key), payload};
@@ -295,8 +302,9 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
     auto status = c.scalar_text("SELECT status FROM suggestion WHERE fingerprint = ?", f.fingerprint);
     if (!status) {
       c.run(
-          "INSERT INTO suggestion (id, rule, method, evidence, fingerprint, payload, score, status, created_at) "
-          "VALUES (?, ?, 'rule', ?, ?, ?, ?, 'pending', ?)",
+          // Every built-in rule matches names (titles, composers, "(Remix)" and the like).
+          "INSERT INTO suggestion (id, rule, method, origin, evidence, fingerprint, payload, score, status, created_at) "
+          "VALUES (?, ?, 'rule', 'name', ?, ?, ?, ?, 'pending', ?)",
           ids::random_id(), f.rule, f.evidence, f.fingerprint, f.payload.dump(), f.score, now);
       ++added;
     } else if (*status == "pending" || *status == "stale") {

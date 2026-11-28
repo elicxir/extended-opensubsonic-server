@@ -78,9 +78,12 @@ void add_media_handlers(HandlerTable& t) {
       img = art.album(c.db, id, size);
     } else if (kind == "mf") {
       img = art.track(c.db, id, size);
+    } else if (kind == "ar") {
+      img = art.artist(c.db, id, size);
     } else if (kind.empty()) {
       if (c.db.scalar_int("SELECT 1 FROM album WHERE id = ?", id)) img = art.album(c.db, id, size);
       else if (c.db.scalar_int("SELECT 1 FROM track WHERE id = ?", id)) img = art.track(c.db, id, size);
+      else img = art.artist(c.db, id, size);
     }
     if (!img) throw SubsonicError(err::not_found, "Artwork not found");
     Response r;

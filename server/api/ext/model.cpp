@@ -35,6 +35,25 @@ std::string provenance(int64_t source, const std::optional<std::string>& method)
   return method.value_or("rule");
 }
 
+std::optional<std::string> origin_of(int64_t source, const std::optional<std::string>& origin) {
+  if (source >= 3) return "manual";
+  if (source == 2) return "tag";
+  return origin;
+}
+
+bool valid_origin(const std::string& origin) {
+  return origin == "external" || origin == "audio" || origin == "name" || origin == "llm";
+}
+
+json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col) {
+  json j = {{"provenance", provenance(source, method)}};
+  if (source == 1 && !st.is_null(col)) j["confidence"] = st.real(col);
+  if (source == 1 && !st.is_null(col + 1)) j["rule"] = st.text(col + 1);
+  if (auto o = origin_of(source, st.opt_text(col + 2))) j["origin"] = *o;
+  if (source == 1 && !st.is_null(col + 3)) j["originRef"] = st.text(col + 3);
+  return j;
+}
+
 bool exists(db::Connection& db, const char* table, const std::string& id) {
   return db.scalar_int(std::format("SELECT 1 FROM {} WHERE id = ?", table), id).has_value();
 }
@@ -151,12 +170,31 @@ json songs(ExtCtx& c, const std::vector<std::string>& ids) {
       e.recorded_date = st.opt_text(2);
     }
   }
+  // How many songs each composition here has (by their effective arrangement).
+  std::unordered_map<std::string, int64_t> composition_songs;
+  {
+    std::vector<std::string> comps;
+    for (const auto& [id, e] : extra)
+      if (!e.composition.empty()) comps.push_back(e.composition);
+    if (!comps.empty()) {
+      auto st = c.db.prepare(
+          "SELECT a.composition_id, COUNT(*) FROM track_arrangement ta "
+          "JOIN arrangement a ON a.id = ta.arrangement_id JOIN track t ON t.id = ta.track_id AND t.missing = 0 "
+          "WHERE a.composition_id IN (SELECT value FROM json_each(?1)) AND ta.source >= ?2 "
+          "AND ta.source = (SELECT MAX(source) FROM track_arrangement x WHERE x.track_id = ta.track_id "
+          "AND x.source >= ?2) GROUP BY a.composition_id");
+      st.bind_all(json_ids(comps), min);
+      while (st.step()) composition_songs[st.text(0)] = st.int64(1);
+    }
+  }
   for (const auto& n : nodes) {
     auto j = to_json_value(n);
     const auto& e = extra[j["id"].get<std::string>()];
     j["compositionId"] = e.composition.empty() ? json(nullptr) : json(e.composition);
     j["arrangementId"] = e.arrangement.empty() ? json(nullptr) : json(e.arrangement);
     j["arrangementProvenance"] = e.prov.empty() ? json(nullptr) : json(e.prov);
+    const auto found = e.composition.empty() ? composition_songs.end() : composition_songs.find(e.composition);
+    j["variationCount"] = found == composition_songs.end() ? 0 : std::max<int64_t>(0, found->second - 1);
     j["titleIds"] = e.titles;
     j["virtualAlbumIds"] = e.virtual_albums;
     j["performanceKind"] = e.performance_kind ? json(*e.performance_kind) : json(nullptr);

@@ -27,6 +27,24 @@ njson names(db::Connection& db, const char* type, const std::string& id, const c
   return out;
 }
 
+// Adds "origin" and "originRef" (columns `col` and `col + 1`) when the row has them.
+njson with_origin(njson j, db::Statement& s, int col) {
+  if (auto o = s.opt_text(col)) j["origin"] = *o;
+  if (auto r = s.opt_text(col + 1)) j["originRef"] = *r;
+  return j;
+}
+
+// The origin of an imported row; an unknown word is dropped rather than refused.
+std::optional<std::string> origin_in(const njson& r) {
+  if (!r.contains("origin") || !r["origin"].is_string()) return std::nullopt;
+  auto o = r["origin"].get<std::string>();
+  return valid_origin(o) ? std::optional(o) : std::nullopt;
+}
+std::optional<std::string> origin_ref_in(const njson& r) {
+  return r.contains("originRef") && r["originRef"].is_string() ? std::optional(r["originRef"].get<std::string>())
+                                                                 : std::nullopt;
+}
+
 njson export_all(db::Connection& db) {
   njson out = {{"format", "eos-export"}, {"version", 1}, {"exportedAt", iso_time(db::now_ms())}};
   std::set<std::string> tracks, albums, compositions, arrangements, titles, folders;
@@ -39,43 +57,59 @@ njson export_all(db::Connection& db) {
   };
 
   out["trackArrangements"] = rows(
-      "SELECT track_id, arrangement_id, source FROM track_arrangement WHERE source IN (1, 3)", [&](db::Statement& s) {
+      "SELECT track_id, arrangement_id, source, origin, origin_ref FROM track_arrangement WHERE source IN (1, 3)",
+      [&](db::Statement& s) {
         tracks.insert(s.text(0));
         arrangements.insert(s.text(1));
-        return njson{{"track", s.text(0)}, {"arrangement", s.text(1)}, {"source", s.int64(2)}};
+        return with_origin(njson{{"track", s.text(0)}, {"arrangement", s.text(1)}, {"source", s.int64(2)}}, s, 3);
       });
-  out["trackTitles"] = rows("SELECT track_id, title_id, source, excluded FROM track_title WHERE source IN (1, 3)",
-                            [&](db::Statement& s) {
-                              tracks.insert(s.text(0));
-                              titles.insert(s.text(1));
-                              return njson{{"track", s.text(0)}, {"title", s.text(1)}, {"source", s.int64(2)},
-                                           {"excluded", s.int64(3) != 0}};
-                            });
-  out["albumFolders"] = rows("SELECT album_id, folder_id, source, excluded FROM album_folder WHERE source IN (1, 3)",
-                             [&](db::Statement& s) {
-                               albums.insert(s.text(0));
-                               folders.insert(s.text(1));
-                               return njson{{"album", s.text(0)}, {"folder", s.text(1)}, {"source", s.int64(2)},
-                                            {"excluded", s.int64(3) != 0}};
-                             });
+  out["trackTitles"] = rows(
+      "SELECT track_id, title_id, source, excluded, origin, origin_ref FROM track_title WHERE source IN (1, 3)",
+      [&](db::Statement& s) {
+        tracks.insert(s.text(0));
+        titles.insert(s.text(1));
+        return with_origin(njson{{"track", s.text(0)}, {"title", s.text(1)}, {"source", s.int64(2)},
+                                 {"excluded", s.int64(3) != 0}},
+                           s, 4);
+      });
+  out["albumFolders"] = rows(
+      "SELECT album_id, folder_id, source, excluded, origin, origin_ref FROM album_folder WHERE source IN (1, 3)",
+      [&](db::Statement& s) {
+        albums.insert(s.text(0));
+        folders.insert(s.text(1));
+        return with_origin(njson{{"album", s.text(0)}, {"folder", s.text(1)}, {"source", s.int64(2)},
+                                 {"excluded", s.int64(3) != 0}},
+                           s, 4);
+      });
   out["albumTracks"] = rows(
-      "SELECT album_id, track_id, disc_number, track_number, source, excluded FROM album_track WHERE source IN (1, 3)",
+      "SELECT album_id, track_id, disc_number, track_number, source, excluded, origin, origin_ref FROM album_track "
+      "WHERE source IN (1, 3)",
       [&](db::Statement& s) {
         albums.insert(s.text(0));
         tracks.insert(s.text(1));
-        return njson{{"album", s.text(0)},          {"track", s.text(1)},          {"disc", opt_json(s.opt_int64(2))},
-                     {"trackNumber", opt_json(s.opt_int64(3))}, {"source", s.int64(4)}, {"excluded", s.int64(5) != 0}};
+        return with_origin(njson{{"album", s.text(0)},
+                                 {"track", s.text(1)},
+                                 {"disc", opt_json(s.opt_int64(2))},
+                                 {"trackNumber", opt_json(s.opt_int64(3))},
+                                 {"source", s.int64(4)},
+                                 {"excluded", s.int64(5) != 0}},
+                           s, 6);
       });
   out["relations"] = rows(
-      "SELECT id, from_type, from_id, to_type, to_id, type, subtype, position, note, source FROM relation "
-      "WHERE source IN (1, 3)",
+      "SELECT id, from_type, from_id, to_type, to_id, type, subtype, position, note, source, origin, origin_ref "
+      "FROM relation WHERE source IN (1, 3)",
       [&](db::Statement& s) {
         for (auto [t, i] : {std::pair{s.text(1), s.text(2)}, {s.text(3), s.text(4)}})
           (t == "track" ? tracks : compositions).insert(i);
-        return njson{{"id", s.text(0)},   {"from", {{"type", s.text(1)}, {"id", s.text(2)}}},
-                     {"to", {{"type", s.text(3)}, {"id", s.text(4)}}}, {"type", s.text(5)},
-                     {"subtype", opt_json(s.opt_text(6))}, {"position", opt_json(s.opt_int64(7))},
-                     {"note", opt_json(s.opt_text(8))},    {"source", s.int64(9)}};
+        return with_origin(njson{{"id", s.text(0)},
+                                 {"from", {{"type", s.text(1)}, {"id", s.text(2)}}},
+                                 {"to", {{"type", s.text(3)}, {"id", s.text(4)}}},
+                                 {"type", s.text(5)},
+                                 {"subtype", opt_json(s.opt_text(6))},
+                                 {"position", opt_json(s.opt_int64(7))},
+                                 {"note", opt_json(s.opt_text(8))},
+                                 {"source", s.int64(9)}},
+                           s, 10);
       });
   out["overrides"] = rows("SELECT entity_type, entity_id, field, value FROM field_override", [&](db::Statement& s) {
     (s.text(0) == "track" ? tracks : albums).insert(s.text(1));
@@ -89,12 +123,18 @@ njson export_all(db::Connection& db) {
         return njson{{"user", s.text(0)}, {"composition", s.text(1)}, {"track", s.text(2)}};
       });
   out["suggestions"] = rows(
-      "SELECT rule, method, model, fingerprint, payload, score, status, evidence FROM suggestion "
+      "SELECT rule, method, model, fingerprint, payload, score, status, evidence, origin, origin_ref FROM suggestion "
       "WHERE status IN ('accepted', 'rejected', 'auto_applied')",
       [&](db::Statement& s) {
-        return njson{{"rule", s.text(0)},       {"method", s.text(1)},  {"model", opt_json(s.opt_text(2))},
-                     {"fingerprint", s.text(3)}, {"payload", s.text(4)}, {"score", s.real(5)},
-                     {"status", s.text(6)},      {"evidence", opt_json(s.opt_text(7))}};
+        return with_origin(njson{{"rule", s.text(0)},
+                                 {"method", s.text(1)},
+                                 {"model", opt_json(s.opt_text(2))},
+                                 {"fingerprint", s.text(3)},
+                                 {"payload", s.text(4)},
+                                 {"score", s.real(5)},
+                                 {"status", s.text(6)},
+                                 {"evidence", opt_json(s.opt_text(7))}},
+                           s, 8);
       });
 
   // Entities: every manual / accepted one, plus tag-made ones the rows above refer to.
@@ -346,25 +386,29 @@ ImportResult import_all(db::Connection& w, const njson& in) {
     auto t = mapped(track_map, r["track"]);
     if (!t) continue;
     w.run(
-        "INSERT OR REPLACE INTO track_arrangement (track_id, arrangement_id, source) "
-        "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM arrangement WHERE id = ?2)",
-        *t, r["arrangement"].get<std::string>(), r["source"].get<int64_t>());
+        "INSERT OR REPLACE INTO track_arrangement (track_id, arrangement_id, source, origin, origin_ref) "
+        "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM arrangement WHERE id = ?2)",
+        *t, r["arrangement"].get<std::string>(), r["source"].get<int64_t>(), origin_in(r), origin_ref_in(r));
     if (w.changes()) count("trackArrangements");
   }
   for (const auto& r : in.value("trackTitles", njson::array())) {
     auto t = mapped(track_map, r["track"]);
     auto ti = mapped(title_map, r["title"]);
     if (!t || !ti) continue;
-    w.run("INSERT OR REPLACE INTO track_title (track_id, title_id, source, excluded) VALUES (?, ?, ?, ?)", *t, *ti,
-          r["source"].get<int64_t>(), r["excluded"].get<bool>());
+    w.run(
+        "INSERT OR REPLACE INTO track_title (track_id, title_id, source, excluded, origin, origin_ref) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        *t, *ti, r["source"].get<int64_t>(), r["excluded"].get<bool>(), origin_in(r), origin_ref_in(r));
     count("trackTitles");
   }
   for (const auto& r : in.value("albumFolders", njson::array())) {
     auto a = mapped(album_map, r["album"]);
     auto f = mapped(folder_map, r["folder"]);
     if (!a || !f) continue;
-    w.run("INSERT OR REPLACE INTO album_folder (album_id, folder_id, source, excluded) VALUES (?, ?, ?, ?)", *a, *f,
-          r["source"].get<int64_t>(), r["excluded"].get<bool>());
+    w.run(
+        "INSERT OR REPLACE INTO album_folder (album_id, folder_id, source, excluded, origin, origin_ref) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        *a, *f, r["source"].get<int64_t>(), r["excluded"].get<bool>(), origin_in(r), origin_ref_in(r));
     count("albumFolders");
   }
   for (const auto& r : in.value("albumTracks", njson::array())) {
@@ -372,11 +416,11 @@ ImportResult import_all(db::Connection& w, const njson& in) {
     auto t = mapped(track_map, r["track"]);
     if (!a || !t) continue;
     w.run(
-        "INSERT OR REPLACE INTO album_track (album_id, track_id, disc_number, track_number, source, excluded) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO album_track (album_id, track_id, disc_number, track_number, source, excluded, "
+        "origin, origin_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         *a, *t, r["disc"].is_number_integer() ? std::optional(r["disc"].get<int64_t>()) : std::nullopt,
         r["trackNumber"].is_number_integer() ? std::optional(r["trackNumber"].get<int64_t>()) : std::nullopt,
-        r["source"].get<int64_t>(), r["excluded"].get<bool>());
+        r["source"].get<int64_t>(), r["excluded"].get<bool>(), origin_in(r), origin_ref_in(r));
     count("albumTracks");
   }
   for (const auto& r : in.value("relations", njson::array())) {
@@ -389,12 +433,12 @@ ImportResult import_all(db::Connection& w, const njson& in) {
     if (!from || !to) continue;
     w.run(
         "INSERT OR IGNORE INTO relation (id, from_type, from_id, to_type, to_id, type, subtype, position, note, source, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "created_at, updated_at, origin, origin_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ids::random_id(), r["from"]["type"].get<std::string>(), *from, r["to"]["type"].get<std::string>(), *to,
         r["type"].get<std::string>(), r["subtype"].is_string() ? std::optional(r["subtype"].get<std::string>()) : std::nullopt,
         r["position"].is_number_integer() ? std::optional(r["position"].get<int64_t>()) : std::nullopt,
         r["note"].is_string() ? std::optional(r["note"].get<std::string>()) : std::nullopt, r["source"].get<int64_t>(), now,
-        now);
+        now, origin_in(r), origin_ref_in(r));
     if (w.changes()) count("relations");
   }
   for (const auto& o : in.value("overrides", njson::array())) {
@@ -419,7 +463,7 @@ ImportResult import_all(db::Connection& w, const njson& in) {
   for (const auto& s : in.value("suggestions", njson::array())) {
     w.run(
         "INSERT INTO suggestion (id, rule, method, model, evidence, fingerprint, payload, score, status, "
-        "created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "created_at, decided_at, origin, origin_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         // A decision overrides a still-open copy that a scan raised in the meantime.
         "ON CONFLICT(fingerprint) DO UPDATE SET status = excluded.status, decided_at = excluded.decided_at "
         "WHERE suggestion.status IN ('pending', 'stale')",
@@ -427,7 +471,7 @@ ImportResult import_all(db::Connection& w, const njson& in) {
         s["model"].is_string() ? std::optional(s["model"].get<std::string>()) : std::nullopt,
         s["evidence"].is_string() ? std::optional(s["evidence"].get<std::string>()) : std::nullopt,
         s["fingerprint"].get<std::string>(), s["payload"].get<std::string>(), s["score"].get<double>(),
-        s["status"].get<std::string>(), now, now);
+        s["status"].get<std::string>(), now, now, origin_in(s), origin_ref_in(s));
     if (w.changes()) count("suggestions");
   }
   // Overrides take effect on the live columns now; the scanner keeps them afterwards.

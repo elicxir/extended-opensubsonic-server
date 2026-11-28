@@ -85,6 +85,9 @@ struct GraphQuery {
   std::vector<std::string> roles;  // artist edges only, e.g. {"composer", "arranger"}; empty: all
   int limit = 200;   // most nodes (1..1000); the nearest are kept
   int fanout = 50;   // a node (other than the seed) with more neighbours is not opened
+  // Keep only the links that rest on one of these origins: external, audio, name, llm
+  // (estimates), tag, manual. Similar links always stay. Unset: all.
+  std::optional<std::vector<std::string>> origins;
   // similar edges (followed from the seed only). A kind the server has not stored throws.
   std::string similar_kind;               // empty: the server default (audio_embed)
   int similar_k = 5;                      // per song, best first (1..50)
@@ -176,6 +179,8 @@ class Api {
   CompositionDetail composition(const std::string& id);
   Song ext_song(const std::string& id);
   SongVersions song_versions(const std::string& song_id);
+  // The song with the names of what it is linked to, its file and its tags.
+  SongDetail song_detail(const std::string& song_id);
   ExtSearchResult ext_search(const std::string& q, int limit = 20);  // per kind
   // Related songs as a graph around q.seed (GET /ext/graph). An unknown seed throws not_found.
   Graph graph(const GraphQuery& q);

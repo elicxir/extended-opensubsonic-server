@@ -1,4 +1,5 @@
 // M4: the /ext API, end to end through ExtRouter (no network).
+#include <fstream>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include "core/config.h"
 #include "db/migrate.h"
 #include "fixtures.h"
+#include "media/artwork.h"
 #include "scanner/scanner.h"
 
 using namespace eos;
@@ -201,12 +203,69 @@ TEST_F(ExtTest, CompositionsAndVersions) {
   auto v = s->get("/ext/songs/" + s->track("Box/01.flac") + "/versions").body;
   EXPECT_EQ(v["composition"]["id"], comp);
   EXPECT_EQ(v["song"]["arrangementProvenance"], "tag");
+  EXPECT_EQ(v["song"]["variationCount"], 1);  // the piano version
+  EXPECT_EQ(v["arrangements"][0]["songs"][0]["variationCount"], 1);
+  EXPECT_EQ(s->get("/ext/songs/" + s->track("Box/04.flac")).body["variationCount"], 0);
   ASSERT_EQ(v["arrangements"].size(), 1u);
   EXPECT_EQ(v["arrangements"][0]["arrangement"]["name"], "Piano Ver.");
   EXPECT_EQ(v["arrangements"][0]["songs"][0]["title"], "Main Theme (Piano Ver.)");
   EXPECT_TRUE(v["performances"].empty());
   EXPECT_TRUE(v["related"].empty());
   EXPECT_EQ(s->get("/ext/songs/nope/versions").status, 404);
+}
+
+TEST_F(ExtTest, SongDetail) {
+  auto d = s->get("/ext/songs/" + s->track("Box/02.flac") + "/detail").body;
+  EXPECT_EQ(d["song"]["title"], "Main Theme (Piano Ver.)");
+  EXPECT_EQ(d["album"]["name"], "Collection Box");
+  EXPECT_EQ(d["album"]["kind"], "physical");
+  EXPECT_EQ(d["composition"]["name"], "Main Theme");
+  EXPECT_EQ(d["composition"]["composers"][0]["name"], "Sato");
+  EXPECT_EQ(d["arrangement"]["name"], "Piano Ver.");
+  EXPECT_EQ(d["arrangement"]["arrangers"][0]["name"], "Suzuki");
+  EXPECT_EQ(d["arrangementLink"]["provenance"], "tag");
+  EXPECT_EQ(d["arrangementLink"]["origin"], "tag");
+  ASSERT_EQ(d["titles"].size(), 1u);
+  EXPECT_EQ(d["titles"][0]["title"]["name"], "Game X");
+  EXPECT_EQ(d["titles"][0]["link"]["provenance"], "tag");
+  ASSERT_EQ(d["virtualAlbums"].size(), 1u);
+  EXPECT_EQ(d["virtualAlbums"][0]["album"]["name"], "Game X Soundtrack");
+  EXPECT_EQ(d["virtualAlbums"][0]["album"]["kind"], "virtual");
+  EXPECT_EQ(d["virtualAlbums"][0]["link"]["provenance"], "tag");
+  EXPECT_TRUE(d["virtualAlbums"][0].contains("discNumber"));
+  EXPECT_EQ(d["virtualAlbums"][0]["trackNumber"], 2);
+  EXPECT_EQ(d["file"]["library"], "Music");
+  EXPECT_EQ(d["file"]["path"], "Box/02.flac");
+  EXPECT_GT(d["file"]["size"].get<int64_t>(), 0);
+  EXPECT_EQ(d["file"]["modified"].get<std::string>().size(), 24u);
+  EXPECT_TRUE(d["file"]["audioMd5"].is_string());
+  EXPECT_EQ(d["tags"]["ARRANGEMENT"], json::array({"Piano Ver."}));
+  EXPECT_EQ(d["tags"]["COLLECTION_WORK"], json::array({"Game X"}));
+
+  // A song nothing is known about: the links are null or empty, never missing.
+  auto plain = s->get("/ext/songs/" + s->track("Other/01.flac") + "/detail").body;
+  EXPECT_TRUE(plain["titles"].empty());
+  EXPECT_TRUE(plain["virtualAlbums"].empty());
+  EXPECT_TRUE(plain.contains("composition") && plain.contains("arrangement") && plain.contains("arrangementLink"));
+
+  // An estimated link says how sure it is and what it rests on; includeEstimated=false hides it.
+  auto pending = s->get("/ext/suggestions?rule=same_composition").body["items"];
+  ASSERT_FALSE(pending.empty());
+  std::string sid = pending[0]["id"];
+  ASSERT_EQ(s->call("POST", "/ext/suggestions/" + sid + "/accept").status, 200);
+  const std::string member = s->track("Other/02.flac");
+  auto est = s->get("/ext/songs/" + member + "/detail").body;
+  EXPECT_EQ(est["composition"]["name"], "Field");
+  EXPECT_EQ(est["arrangementLink"]["provenance"], "rule");
+  EXPECT_EQ(est["arrangementLink"]["rule"], "same_composition");
+  EXPECT_EQ(est["arrangementLink"]["origin"], "name");
+  EXPECT_TRUE(est["arrangementLink"]["confidence"].is_number());
+  auto sure = s->get("/ext/songs/" + member + "/detail?includeEstimated=false").body;
+  EXPECT_TRUE(sure["arrangementLink"].is_null());
+  EXPECT_TRUE(sure["composition"].is_null());
+  EXPECT_EQ(s->get("/ext/songs/nope/detail").status, 404);
+  auto features = s->get("/ext/info").body["features"];
+  EXPECT_NE(std::find(features.begin(), features.end(), "songDetail"), features.end());
 }
 
 TEST_F(ExtTest, AcceptAndRejectSuggestions) {
@@ -726,6 +785,55 @@ TEST_F(ExtTest, GraphPeopleAndAlbumsOnRequest) {
   EXPECT_EQ((*first)["expanded"], false);
 }
 
+TEST_F(ExtTest, ArtistImages) {
+  const std::string artist = s->conn->scalar_text("SELECT id FROM artist WHERE name = 'Kato'").value_or("");
+  ASSERT_FALSE(artist.empty());
+  // The smallest PNG there is (1x1).
+  const std::string png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  EXPECT_EQ(s->get("/ext/artists/" + artist + "/image").status, 404);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/" + artist + "/image", json{{"data", png}}, &s->user_key).status, 403);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/" + artist + "/image", json{{"data", "aGVsbG8="}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/nope/image", json{{"data", png}}).status, 404);
+
+  auto put = s->call("PUT", "/ext/artists/" + artist + "/image",
+                     json{{"data", png}, {"sourceUrl", "https://example.org/kato"}, {"license", "CC BY-SA 4.0"}});
+  ASSERT_EQ(put.status, 200);
+  EXPECT_EQ(put.body["mime"], "image/png");
+  EXPECT_EQ(put.body["license"], "CC BY-SA 4.0");
+  EXPECT_TRUE(put.body["credit"].is_null());
+  EXPECT_EQ(put.body["coverArt"].get<std::string>().rfind("ar-" + artist + "_", 0), 0u);
+
+  bool listed = false;
+  const auto everyone = s->get("/ext/artists").body["items"];
+  for (const auto& a : everyone) {
+    if (a["id"] != artist) {
+      EXPECT_FALSE(a.contains("coverArt"));
+      continue;
+    }
+    listed = true;
+    EXPECT_EQ(a["name"], "Kato");
+    EXPECT_EQ(a["coverArt"], put.body["coverArt"]);
+    EXPECT_NE(std::find(a["roles"].begin(), a["roles"].end(), "composer"), a["roles"].end());
+  }
+  EXPECT_TRUE(listed);
+  auto got = s->get("/ext/artists/" + artist + "/image", &s->user_key);
+  EXPECT_EQ(got.body["sourceUrl"], "https://example.org/kato");
+  auto all = s->get("/ext/artist-images").body["items"];
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_EQ(all[0]["artistId"], artist);
+
+  media::Artwork art(s->cfg);
+  auto img = art.artist(*s->conn, artist, 0);
+  ASSERT_TRUE(img);
+  EXPECT_EQ(img->mime, "image/png");
+  EXPECT_FALSE(art.artist(*s->conn, "nope", 0));
+
+  EXPECT_EQ(s->call("DELETE", "/ext/artists/" + artist + "/image").status, 204);
+  EXPECT_EQ(s->get("/ext/artists/" + artist + "/image").status, 404);
+  EXPECT_TRUE(s->get("/ext/artist-images").body["items"].empty());
+}
+
 TEST_F(ExtTest, SimilarityReplacedOneKindAtATime) {
   auto t1 = s->track("Box/01.flac"), t2 = s->track("Box/02.flac"), t4 = s->track("Box/04.flac"),
        f1 = s->track("Other/01.flac");
@@ -868,4 +976,195 @@ TEST_F(ExtTest, GraphSimilarFromTheSeedOnly) {
   EXPECT_EQ(s->get(seed + "&similarKind=audio_match").status, 400);
   EXPECT_EQ(s->get(seed + "&similarMinScore=high").status, 400);
   EXPECT_EQ(s->get(seed + "&similarK=x").status, 400);
+}
+
+namespace {
+
+// Field / Field (Arrange) by Kato: the rules propose them as one composition by title.
+// mb_link() sends what mb-match would: the same songs under a MusicBrainz work.
+struct Approvals {
+  Server& s;
+  std::string f1 = s.track("Other/01.flac"), f2 = s.track("Other/02.flac");
+
+  std::string title_match() {
+    auto items = s.get("/ext/suggestions?rule=same_composition").body["items"];
+    EXPECT_EQ(items.size(), 1u);
+    return items.empty() ? "" : items[0]["id"].get<std::string>();
+  }
+  std::string mb_link() {
+    json body = {{"suggestions",
+                  json::array({{{"rule", "mb_match"},
+                                {"score", 0.8},
+                                {"origin", "external"},
+                                {"originRef", "https://musicbrainz.org/work/mbid-field"},
+                                {"proposal",
+                                 {{"action", "link_arrangement"},
+                                  {"composition", {{"name", "Field Theme"}, {"musicBrainzWorkId", "mbid-field"},
+                                                   {"composers", {"Kato"}}}},
+                                  {"tracks", {f1, f2}}}}}})}};
+    auto r = s.call("POST", "/ext/suggestions", body);
+    EXPECT_EQ(r.status, 201) << r.body.dump();
+    return r.body["created"][0];
+  }
+  int accept(const std::string& id) { return s.call("POST", "/ext/suggestions/" + id + "/accept").status; }
+  std::string composition_of(const std::string& track) {
+    auto v = s.get("/ext/songs/" + track).body["compositionId"];
+    return v.is_string() ? v.get<std::string>() : "";
+  }
+  int64_t count(const std::string& sql) { return s.conn->scalar_int(sql).value_or(0); }
+};
+
+}  // namespace
+
+TEST_F(ExtTest, TitleMatchDoesNotUndoMusicBrainz) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(mb), 200);
+  auto work = a.composition_of(a.f1);
+  ASSERT_FALSE(work.empty());
+  // Accepting the older title match afterwards must not pull the songs out again.
+  ASSERT_EQ(a.accept(title), 200);
+  EXPECT_EQ(a.composition_of(a.f1), work);
+  EXPECT_EQ(a.composition_of(a.f2), work);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition WHERE name_norm = 'field'"), 0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition"),
+            a.count("SELECT COUNT(DISTINCT a.composition_id) FROM track_arrangement ta "
+                    "JOIN arrangement a ON a.id = ta.arrangement_id"));
+}
+
+TEST_F(ExtTest, MovedSongsLeaveNoEmptyComposition) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(title), 200);
+  auto by_title = a.composition_of(a.f1);
+  ASSERT_FALSE(by_title.empty());
+  // MusicBrainz moves both songs on: the title-made composition is left empty and goes.
+  ASSERT_EQ(a.accept(mb), 200);
+  auto work = a.composition_of(a.f1);
+  EXPECT_NE(work, by_title);
+  EXPECT_EQ(a.composition_of(a.f2), work);
+  EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 404);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM arrangement WHERE composition_id = '" + by_title + "'"), 0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM participant WHERE entity_type = 'composition' AND entity_id = '" +
+                    by_title + "'"),
+            0);
+  EXPECT_EQ(a.count("SELECT COUNT(*) FROM composition WHERE source = 1 AND NOT EXISTS ("
+                    "  SELECT 1 FROM arrangement ar JOIN track_arrangement ta ON ta.arrangement_id = ar.id "
+                    "  WHERE ar.composition_id = composition.id)"),
+            0);
+}
+
+TEST_F(ExtTest, EmptiedCompositionStaysWhenSomethingPointsAtIt) {
+  Approvals a{*s};
+  auto title = a.title_match(), mb = a.mb_link();
+  ASSERT_EQ(a.accept(title), 200);
+  auto by_title = a.composition_of(a.f1);
+  // Someone picked a favourite version of it: keep the composition (now empty).
+  ASSERT_EQ(s->call("PUT", "/ext/compositions/" + by_title + "/preferred", json{{"songId", a.f1}}, &s->user_key).status,
+            200);
+  ASSERT_EQ(a.accept(mb), 200);
+  EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 200);
+}
+
+TEST_F(ExtTest, GraphKeepsOnlyTheOriginsAskedFor) {
+  Approvals a{*s};
+  ASSERT_EQ(a.accept(a.title_match()), 200);
+  const auto seed = "/ext/graph?seed=song:" + a.f1 + "&include=composition";
+  auto performances = [&](const std::string& extra) {
+    auto r = s->get(seed + extra);
+    EXPECT_EQ(r.status, 200) << r.body.dump();
+    std::vector<json> out;
+    for (const auto& e : r.body["edges"])
+      if (e["type"] == "performance") out.push_back(e);
+    return out;
+  };
+  // Unfiltered, the estimated edge says which rule made it and what it rests on: the
+  // built-in rules match names.
+  auto all = performances("");
+  ASSERT_EQ(all.size(), 2u);
+  EXPECT_EQ(all[0]["rule"], "same_composition");
+  EXPECT_EQ(all[0]["origin"], "name");
+  EXPECT_FALSE(all[0].contains("originRef"));
+  // Only what an outside database states: the title match goes, and with it the other song.
+  EXPECT_TRUE(performances("&origin=external,tag,manual").empty());
+  EXPECT_TRUE(performances("&origin=").empty());  // empty: nothing but computed links
+  EXPECT_EQ(s->get(seed + "&origin=guess").status, 400);
+  ASSERT_EQ(a.accept(a.mb_link()), 200);
+  auto mb = performances("&origin=external,tag,manual");
+  ASSERT_EQ(mb.size(), 2u);
+  EXPECT_EQ(mb[0]["rule"], "mb_match");
+  EXPECT_EQ(mb[0]["origin"], "external");
+  EXPECT_EQ(mb[0]["originRef"], "https://musicbrainz.org/work/mbid-field");
+}
+
+TEST_F(ExtTest, SuggestionsKeepTheirOrigin) {
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  auto post = [&](json extra) {
+    json one = {{"rule", "tool"}, {"score", 0.5},
+                {"proposal", {{"action", "link_title"}, {"titleName", "Field Game"}, {"tracks", {f1, f2}}}}};
+    one.update(extra);
+    return s->call("POST", "/ext/suggestions", json{{"suggestions", json::array({one})}});
+  };
+  // A word outside the list is refused for that item.
+  auto bad = post({{"origin", "tag"}});
+  EXPECT_TRUE(bad.body["created"].empty()) << bad.body.dump();
+  EXPECT_EQ(bad.body["errors"].size(), 1u);
+  // No origin: an LLM's guess, as before.
+  auto r = post(json::object());
+  ASSERT_EQ(r.status, 201) << r.body.dump();
+  auto id = r.body["created"][0].get<std::string>();
+  auto got = s->get("/ext/suggestions/" + id).body;
+  EXPECT_EQ(got["origin"], "llm");
+  EXPECT_TRUE(got["originRef"].is_null());
+
+  // Accepting copies it onto the rows, and an export carries it to the next database.
+  ASSERT_EQ(s->call("POST", "/ext/suggestions/" + id + "/accept").status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT origin FROM track_title WHERE track_id = ?", f1), "llm");
+  auto dump = s->get("/ext/export").body;
+  ASSERT_EQ(dump["trackTitles"].size(), 2u);
+  EXPECT_EQ(dump["trackTitles"][0]["origin"], "llm");
+  s->conn->exec("UPDATE track_title SET origin = NULL");
+  ASSERT_EQ(s->call("POST", "/ext/import", dump).status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT origin FROM track_title WHERE track_id = ?", f1), "llm");
+}
+
+TEST_F(ExtTest, AcceptingATitleMatchKeepsNamesAsWritten) {
+  Approvals a{*s};
+  // The rule groups by normalized names ("kato"); the composer keeps the tag's spelling.
+  auto before = s->conn->scalar_text("SELECT name FROM artist WHERE name_norm = 'kato'");
+  ASSERT_TRUE(before.has_value());
+  EXPECT_NE(*before, "kato");
+  ASSERT_EQ(a.accept(a.title_match()), 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT name FROM artist WHERE name_norm = 'kato'"), before);
+}
+
+TEST_F(ExtTest, VirtualAlbumCoverAndArtists) {
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  auto va = s->call("POST", "/ext/albums", json{{"name", "Field Game"}, {"tracks", {f1, f2}}});
+  ASSERT_EQ(va.status, 201);
+  const std::string path = "/ext/albums/" + va.body["id"].get<std::string>();
+  const std::string id = va.body["id"];
+
+  // A cover must be an image inside the library.
+  fs::create_directories(music / "covers");
+  std::ofstream(music / "covers/field.png", std::ios::binary) << test::make_png(8, 8);
+  std::ofstream(music / "covers/notes.txt") << "not an image";
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "covers/missing.png"}}).status, 400);
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "covers/notes.txt"}}).status, 400);
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "../outside.png"}}).status, 400);
+  ASSERT_EQ(s->call("PATCH", path, json{{"cover", "covers/field.png"}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_text(
+                "SELECT value FROM field_override WHERE entity_type = 'album' AND entity_id = ? AND field = 'cover'", id),
+            "covers/field.png");
+  ASSERT_EQ(s->call("PATCH", path, json{{"cover", nullptr}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_int("SELECT COUNT(*) FROM field_override WHERE entity_id = ?", id), 0);
+
+  // Album artists, the most important first; physical albums keep what their tags say.
+  ASSERT_EQ(s->call("PATCH", path, json{{"albumArtists", {"Kato", "Sato"}}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT display_artist FROM album WHERE id = ?", id), "Kato / Sato");
+  EXPECT_EQ(s->conn->scalar_int(
+                "SELECT COUNT(*) FROM participant WHERE entity_type = 'album' AND entity_id = ? AND role = 'albumartist'", id),
+            2);
+  auto physical = s->conn->scalar_text("SELECT album_id FROM track WHERE id = ?", f1);
+  EXPECT_EQ(s->call("PATCH", "/ext/albums/" + *physical, json{{"albumArtists", {"Kato"}}}).status, 409);
 }
