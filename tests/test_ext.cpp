@@ -1019,3 +1019,13 @@ TEST_F(ExtTest, SuggestionsKeepTheirOrigin) {
   ASSERT_EQ(s->call("POST", "/ext/import", dump).status, 200);
   EXPECT_EQ(s->conn->scalar_text("SELECT origin FROM track_title WHERE track_id = ?", f1), "llm");
 }
+
+TEST_F(ExtTest, AcceptingATitleMatchKeepsNamesAsWritten) {
+  Approvals a{*s};
+  // The rule groups by normalized names ("kato"); the composer keeps the tag's spelling.
+  auto before = s->conn->scalar_text("SELECT name FROM artist WHERE name_norm = 'kato'");
+  ASSERT_TRUE(before.has_value());
+  EXPECT_NE(*before, "kato");
+  ASSERT_EQ(a.accept(a.title_match()), 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT name FROM artist WHERE name_norm = 'kato'"), before);
+}

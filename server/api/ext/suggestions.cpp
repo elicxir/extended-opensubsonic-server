@@ -19,6 +19,12 @@
 namespace eos::api::ext {
 namespace {
 
+// A person a proposal names: made when new. One the library already knows keeps the
+// name its tags (or a person) gave it; a proposal may spell it differently.
+void ensure_artist(db::Connection& w, const scanner::Person& p) {
+  if (!w.scalar_int("SELECT 1 FROM artist WHERE id = ?", scanner::artist_id(p.name))) scanner::upsert_artist(w, p);
+}
+
 using njson = nlohmann::json;
 
 const std::set<std::string> kRelationTypes = {"medley", "quote", "derivative", "cover", "related"};
@@ -176,7 +182,7 @@ class ArrangementPicker {
       int pos = 0;
       for (const auto& n : arrangers) {
         scanner::Person person{n, "", "", ""};
-        scanner::upsert_artist(w_, person);
+        ensure_artist(w_, person);
         w_.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
             "suggestion_id) VALUES ('arrangement', ?, ?, 'arranger', '', ?, ?, ?)",
@@ -398,7 +404,7 @@ void apply_rows(db::Connection& w, const njson& p, int source, const std::string
         for (const auto& n : p["composers"]) composers.push_back({n.get<std::string>(), "", "", ""});
       int pos = 0;
       for (const auto& person : composers) {
-        scanner::upsert_artist(w, person);
+        ensure_artist(w, person);
         w.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, "
             "source, suggestion_id) VALUES ('composition', ?, ?, 'composer', '', ?, ?, ?)",
@@ -450,7 +456,7 @@ void apply_rows(db::Connection& w, const njson& p, int source, const std::string
       int pos = 0;
       for (const auto& n : cj.value("composers", njson::array())) {
         scanner::Person person{n.get<std::string>(), "", "", ""};
-        scanner::upsert_artist(w, person);
+        ensure_artist(w, person);
         w.run(
             "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
             "suggestion_id) VALUES ('composition', ?, ?, 'composer', '', ?, ?, ?)",
@@ -488,7 +494,7 @@ void apply_rows(db::Connection& w, const njson& p, int source, const std::string
         int pos = 0;
         for (const auto& n : aj.value("arrangers", njson::array())) {
           scanner::Person person{n.get<std::string>(), "", "", ""};
-          scanner::upsert_artist(w, person);
+          ensure_artist(w, person);
           w.run(
               "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source, "
               "suggestion_id) VALUES ('arrangement', ?, ?, 'arranger', '', ?, ?, ?)",
