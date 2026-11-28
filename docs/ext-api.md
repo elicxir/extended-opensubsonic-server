@@ -32,6 +32,7 @@
   | --- | --- |
   | `compositionId`、`arrangementId` | 曲が属する楽曲と編曲（ないときは `null`） |
   | `arrangementProvenance` | その紐付けの出どころ（`manual`・`tag`・`rule`・`llm`） |
+  | `variationCount` | 同じ楽曲の、この曲以外の曲の数（編曲違いと演奏違い。関係でつながった曲は数えません）。楽曲が決まっていない曲は 0 |
   | `titleIds` | 曲が属する作品 |
   | `virtualAlbumIds` | 曲が入っている仮想アルバム |
   | `performanceKind`、`recordedDate` | 演奏の種類（`live`・`studio`）と収録日 |

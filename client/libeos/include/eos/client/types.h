@@ -57,6 +57,7 @@ struct Song {
   // Only from /ext (empty from /rest).
   std::optional<std::string> composition_id, arrangement_id;
   std::optional<std::string> arrangement_provenance;  // manual, tag, rule, llm
+  int variation_count = 0;  // other songs of the same composition
   std::optional<std::string> performance_kind;        // live, studio
   std::optional<std::string> recorded_date;
   std::vector<std::string> title_ids, virtual_album_ids;

@@ -22,7 +22,7 @@ bool valid_origin(const std::string& origin);
 json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col);
 
 // Songs as OpenSubsonic Child objects plus compositionId, arrangementId,
-// arrangementProvenance, titleIds, virtualAlbumIds, performanceKind, recordedDate.
+// arrangementProvenance, variationCount, titleIds, virtualAlbumIds, performanceKind, recordedDate.
 json songs(ExtCtx& c, const std::vector<std::string>& ids);
 // Albums as AlbumID3 plus kind and source.
 json albums(ExtCtx& c, const std::vector<std::string>& ids);

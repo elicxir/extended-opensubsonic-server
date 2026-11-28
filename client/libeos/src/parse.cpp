@@ -68,6 +68,7 @@ Song song(const json& j) {
   s.composition_id = opt<std::string>(j, "compositionId");
   s.arrangement_id = opt<std::string>(j, "arrangementId");
   s.arrangement_provenance = opt<std::string>(j, "arrangementProvenance");
+  s.variation_count = get<int>(j, "variationCount");
   s.performance_kind = opt<std::string>(j, "performanceKind");
   s.recorded_date = opt<std::string>(j, "recordedDate");
   s.title_ids = get<std::vector<std::string>>(j, "titleIds");

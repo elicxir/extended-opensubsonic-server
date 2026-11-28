@@ -202,6 +202,9 @@ TEST_F(ExtTest, CompositionsAndVersions) {
   auto v = s->get("/ext/songs/" + s->track("Box/01.flac") + "/versions").body;
   EXPECT_EQ(v["composition"]["id"], comp);
   EXPECT_EQ(v["song"]["arrangementProvenance"], "tag");
+  EXPECT_EQ(v["song"]["variationCount"], 1);  // the piano version
+  EXPECT_EQ(v["arrangements"][0]["songs"][0]["variationCount"], 1);
+  EXPECT_EQ(s->get("/ext/songs/" + s->track("Box/04.flac")).body["variationCount"], 0);
   ASSERT_EQ(v["arrangements"].size(), 1u);
   EXPECT_EQ(v["arrangements"][0]["arrangement"]["name"], "Piano Ver.");
   EXPECT_EQ(v["arrangements"][0]["songs"][0]["title"], "Main Theme (Piano Ver.)");
