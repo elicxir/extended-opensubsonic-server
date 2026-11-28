@@ -35,6 +35,16 @@ std::string provenance(int64_t source, const std::optional<std::string>& method)
   return method.value_or("rule");
 }
 
+std::optional<std::string> origin_of(int64_t source, const std::optional<std::string>& origin) {
+  if (source >= 3) return "manual";
+  if (source == 2) return "tag";
+  return origin;
+}
+
+bool valid_origin(const std::string& origin) {
+  return origin == "external" || origin == "audio" || origin == "name" || origin == "llm";
+}
+
 bool exists(db::Connection& db, const char* table, const std::string& id) {
   return db.scalar_int(std::format("SELECT 1 FROM {} WHERE id = ?", table), id).has_value();
 }

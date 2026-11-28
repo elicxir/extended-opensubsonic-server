@@ -264,14 +264,16 @@ void prune_left(db::Connection& w, const std::set<std::string>& left) {
 
 json suggestion_json(db::Connection& db, const std::string& id) {
   auto st = db.prepare(
-      "SELECT id, rule, method, model, score, status, created_at, decided_at, payload, evidence FROM suggestion "
-      "WHERE id = ?");
+      "SELECT id, rule, method, model, score, status, created_at, decided_at, payload, evidence, origin, origin_ref "
+      "FROM suggestion WHERE id = ?");
   st.bind(1, id);
   if (!st.step()) throw not_found("Suggestion not found");
   auto payload = njson::parse(st.text(8));
   json j = {{"id", st.text(0)},
             {"rule", st.text(1)},
             {"method", st.text(2)},
+            {"origin", st.opt_text(10) ? json(*st.opt_text(10)) : json(nullptr)},
+            {"originRef", st.opt_text(11) ? json(*st.opt_text(11)) : json(nullptr)},
             {"model", st.opt_text(3) ? json(*st.opt_text(3)) : json(nullptr)},
             {"score", st.real(4)},
             {"status", st.text(5)},
@@ -340,7 +342,31 @@ void validate_proposal(db::Connection& db, const njson& p) {
   }
 }
 
+namespace {
+
+// The estimated rows a suggestion wrote take its origin, so that it stays with them
+// (in exports too) whatever becomes of the suggestion.
+void stamp_origin(db::Connection& w, const std::string& sid) {
+  if (sid.empty()) return;
+  for (const char* table : {"track_arrangement", "track_title", "relation", "participant", "album_track", "album_folder"})
+    w.run(std::string("UPDATE ") + table +
+              " SET (origin, origin_ref) = (SELECT origin, origin_ref FROM suggestion WHERE id = ?1) "
+              "WHERE suggestion_id = ?1 AND source = 1 AND origin IS NULL",
+          sid);
+}
+
+void apply_rows(db::Connection& w, const njson& p, int source, const std::string& sid);
+
+}  // namespace
+
 void apply_proposal(db::Connection& w, const njson& p, int source, const std::string& sid) {
+  apply_rows(w, p, source, sid);
+  stamp_origin(w, sid);
+}
+
+namespace {
+
+void apply_rows(db::Connection& w, const njson& p, int source, const std::string& sid) {
   validate_proposal(w, p);
   const auto action = p["action"].get<std::string>();
   const auto now = db::now_ms();
@@ -494,5 +520,7 @@ void apply_proposal(db::Connection& w, const njson& p, int source, const std::st
   }
   prune_left(w, left);
 }
+
+}  // namespace
 
 }  // namespace eos::api::ext

@@ -105,7 +105,7 @@
 | `limit` | 節の上限（1〜1000）。中心に近い節から残します | 200 |
 | `fanout` | 中心以外の節は、相手がこの数より多いと開きません（1〜1000） | 50 |
 | `includeEstimated` | `false` で推定の紐付けを除きます | `true` |
-| `rules` | 推定の紐付けを、それを作った候補の規則（`rule`）で絞ります（`,` 区切り。例：`musicbrainz_work,musicbrainz_arrangement`）。タグと手動の紐付けは常に残ります。空にすると推定を全部除きます | 絞らない |
+| `origin` | つながりを出所（`origin`、下記）で絞ります（`,` 区切り）。例：`external,tag,manual` で、外部 DB が書いているものとタグと手作業だけ。出所のわからない推定は残りません。`similar` の辺は常に残ります。知らない語は 400 | 絞らない |
 | `similarKind` | `similar` の辺に使う類似度の種類（`GET /ext/similarity`）。保存されていない種類は 400 です | `audio_embed` |
 | `similarK` | `similar` の辺を、1 曲あたり点数の高い順に何本まで出すか（1〜50） | 5 |
 | `similarMinScore` | これより点数の低い `similar` の辺は出しません | なし |
@@ -153,6 +153,7 @@
 | `similar` | 曲 — 曲（向きなし。`from` は相手を選んだ側） | `kind`、`score`（尺度は種類ごと）。`provenance` は `computed` |
 
 - どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` と、それを作った候補の規則 `rule`（`musicbrainz_work`・`same_composition` など）も付きます。
+- `origin`：つながりが何に基づくか（[link-origin.md](link-origin.md)）。`tag`（タグ）、`manual`（手作業）、推定なら `external`（外部 DB がそのつながりを書いている）・`audio`（音の解析）・`name`（名前の一致）・`llm`（言語モデルの推測）。出所のわからない推定（006 より前に作られ、候補の見つからない行など）には付きません。推定には `originRef`（根拠を確かめられる先。MusicBrainz の URL など）が付くことがあります。
 - 辺は、応答に入った節どうしのものを全部返します（端の節どうしの辺も含みます）。
 - `truncated`：`limit` に達して、たどるのをやめたときに `true`。
 - 人物やアルバムは相手が数百になるので、`include` に書いたときだけたどります。書いても、`fanout` を超える節は開かずに `degree` だけ返します。
@@ -206,7 +207,7 @@
 
 ```json
 {
-  "id": "…", "rule": "derivative", "method": "rule", "model": null, "score": 1.0,
+  "id": "…", "rule": "derivative", "method": "rule", "origin": "name", "originRef": null, "model": null, "score": 1.0,
   "status": "pending", "createdAt": "…", "decidedAt": null,
   "summary": "「Main Theme (TV Size) (Box)」→「Main Theme (Box)」: derivative（tv_size）",
   "targets": [{"type": "track", "id": "…", "name": "…"}],
@@ -216,6 +217,7 @@
 ```
 
 - `status`：`pending`、`accepted`、`auto_applied`、`rejected`、`stale`（タグや手作業で同じ情報が入って不要になった）。
+- `origin`：候補が何に基づくか（`external`・`audio`・`name`・`llm`）。サーバーの規則はどれも `name` です。承認すると、候補が書いた推定の行に `origin` と `originRef` が写り、候補とは別に残ります（書き出しにも入ります）。
 - `rule` の規則（サーバーがスキャンのたびに出すもの）：
 
   | 規則 | 条件 |
@@ -254,12 +256,14 @@
 ```json
 {"suggestions": [
   {"rule": "title", "model": "モデル名", "score": 0.95,
+   "origin": "external", "originRef": "https://musicbrainz.org/work/…",
    "evidence": {"reason": "…", "urls": ["https://…"]},
    "proposal": {"action": "link_title", "titleName": "Game Z", "tracks": ["…"]}}
 ]}
 ```
 
 - `method` は `llm` として保存します。`score` は確信度（0〜1）です。
+- `origin`（任意）は、推定が何に基づくかです：`external`（外部 DB が、そのつながりを直接書いている）、`audio`（音の解析）、`name`（名前の一致。外部 DB の名前や別名と照らした場合も含む）、`llm`（言語モデルの推測。省略したとき）。ほかの語は、その 1 件のエラーです。`originRef`（任意）は根拠を確かめられる先（URL など）です。
 - 1 件ずつ確かめて保存します。不正な 1 件は `errors` に入り、他は登録されます。
 - 同じ推定（規則名と `proposal` が同じ）は `skipped` になります。却下済みのものも含みます。
 - 設定 `estimate.auto_apply_min_confidence` が 0 より大きく、`score` がそれ以上なら、その場で推定（1）として取り込み、`auto_applied` にします。

@@ -295,8 +295,9 @@ int64_t run_rules(db::Connection& c, const Config& cfg) {
     auto status = c.scalar_text("SELECT status FROM suggestion WHERE fingerprint = ?", f.fingerprint);
     if (!status) {
       c.run(
-          "INSERT INTO suggestion (id, rule, method, evidence, fingerprint, payload, score, status, created_at) "
-          "VALUES (?, ?, 'rule', ?, ?, ?, ?, 'pending', ?)",
+          // Every built-in rule matches names (titles, composers, "(Remix)" and the like).
+          "INSERT INTO suggestion (id, rule, method, origin, evidence, fingerprint, payload, score, status, created_at) "
+          "VALUES (?, ?, 'rule', 'name', ?, ?, ?, ?, 'pending', ?)",
           ids::random_id(), f.rule, f.evidence, f.fingerprint, f.payload.dump(), f.score, now);
       ++added;
     } else if (*status == "pending" || *status == "stale") {

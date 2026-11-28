@@ -323,6 +323,9 @@ struct GraphEdge {
   std::string provenance;
   std::optional<double> confidence;  // estimated links only
   std::optional<std::string> rule;   // estimated links: the suggestion's rule, e.g. musicbrainz_work
+  // What the link rests on: tag, manual, external, audio, name, llm; none when not known.
+  std::optional<std::string> origin;
+  std::optional<std::string> origin_ref;  // estimated links: where to look it up, e.g. a MusicBrainz URL
   // performance
   std::optional<std::string> arrangement_id, arrangement_name, arrangement_kind;
   bool is_original = false;

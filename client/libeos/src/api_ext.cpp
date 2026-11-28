@@ -192,7 +192,7 @@ Graph Api::graph(const GraphQuery& gq) {
           {"fanout", std::to_string(gq.fanout)}};
   if (!gq.include.empty()) q.emplace_back("include", csv(gq.include));
   if (!gq.roles.empty()) q.emplace_back("roles", csv(gq.roles));
-  if (gq.rules) q.emplace_back("rules", csv(*gq.rules));
+  if (gq.origins) q.emplace_back("origin", csv(*gq.origins));
   if (std::find(gq.include.begin(), gq.include.end(), "similar") != gq.include.end()) {
     if (!gq.similar_kind.empty()) q.emplace_back("similarKind", gq.similar_kind);
     q.emplace_back("similarK", std::to_string(gq.similar_k));

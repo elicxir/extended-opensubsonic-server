@@ -85,9 +85,9 @@ struct GraphQuery {
   std::vector<std::string> roles;  // artist edges only, e.g. {"composer", "arranger"}; empty: all
   int limit = 200;   // most nodes (1..1000); the nearest are kept
   int fanout = 50;   // a node (other than the seed) with more neighbours is not opened
-  // Keep estimated links only when the suggestion that made them came from one of these
-  // rules (e.g. {"musicbrainz_work"}); tag and manual links always stay. Unset: all.
-  std::optional<std::vector<std::string>> rules;
+  // Keep only the links that rest on one of these origins: external, audio, name, llm
+  // (estimates), tag, manual. Similar links always stay. Unset: all.
+  std::optional<std::vector<std::string>> origins;
   // similar edges (followed from the seed only). A kind the server has not stored throws.
   std::string similar_kind;               // empty: the server default (audio_embed)
   int similar_k = 5;                      // per song, best first (1..50)

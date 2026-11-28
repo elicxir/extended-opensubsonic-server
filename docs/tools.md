@@ -51,7 +51,7 @@ docker compose run --rm tools mb-match --album "Original Soundtrack" --dry-run
 
 - 原曲がもう楽曲に入っていれば、その楽曲（`composition.id`）に入れます。入っていなければ、原曲の曲名と作曲者で楽曲を作り、原曲も一緒に入れます（`originalTracks`）。
 - 編曲の名前はアルバム名です（名前から種類を推測します。例：「ピアノ」「Piano」なら piano）。曲に `ARRANGER` があれば編曲者にします。
-- `rule` は `audio_match`、`model` は `chroma-qmax/1` です。`evidence` に z と、上位 3 曲の点数を入れます。
+- `rule` は `audio_match`、`origin` は `audio`、`model` は `chroma-qmax/1` です。`evidence` に z と、上位 3 曲の点数を入れます。
 
 ### 速さ
 
@@ -77,4 +77,5 @@ docker compose run --rm tools mb-match --album "Original Soundtrack" --dry-run
 
 - `--aliases`：作品に結びつかなかった曲を、曲名で MusicBrainz の作品名と別名から探します。作曲者のタグが作品の作曲者と一致するものだけを使います。「Bloody Tears」と「血の涙」のように、別名として登録された別の言語の曲名がつながります。
 - `--titles`：作品の親（`parts`）を作品（`COLLECTION_WORK` に当たるもの）にする候補も作ります。
+- 候補の出所（`origin`）：録音と作品・編曲・親の関係から作るもの（`musicbrainz_work`・`musicbrainz_arrangement`・`musicbrainz_parts`）は `external`、別名で探したもの（`musicbrainz_alias`）は `name` です。MusicBrainz が「この録音はこの作品」と書いているのは前者だけだからです。`originRef` は作品の URL です。
 - MusicBrainz には 1 秒に 1 回までしか問い合わせません。全部のアルバムを調べると時間がかかるので、`--album` で絞れます。

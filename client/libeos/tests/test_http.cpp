@@ -56,6 +56,6 @@ TEST(Api, TokenIsMd5OfPasswordAndSalt) {
 }
 
 TEST(Api, MediaUrlsCarryTheTokenWithoutAKey) {
-  Api api({.base_url = "http://nd:4533", .client_name = "kleulir", .username = "alice", .token = "abc", .salt = "s1"});
+  Api api({.base_url = "http://nd:4533", .username = "alice", .token = "abc", .salt = "s1", .client_name = "kleulir"});
   EXPECT_EQ(api.stream_url("s1"), "http://nd:4533/rest/stream?id=s1&u=alice&t=abc&s=s1&v=1.16.1&c=kleulir");
 }

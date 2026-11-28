@@ -327,6 +327,9 @@ def main():
                     proposal["arrangement"]["arrangers"] = work_info[w]["arrangers"]
             proposals.append({
                 "rule": "musicbrainz_arrangement" if len(works_with_tracks) > 1 else "musicbrainz_work",
+                # MusicBrainz itself says these recordings are of this work.
+                "origin": "external",
+                "originRef": f"https://musicbrainz.org/work/{w}",
                 "model": "musicbrainz",
                 "score": 0.95,
                 "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{x}" for x in sorted(members)],
@@ -347,7 +350,9 @@ def main():
                 by_parent.setdefault(p, []).append(t)
         for (pid, ptitle), tracks in by_parent.items():
             if len(tracks) >= args.min_tracks:
-                proposals.append({"rule": "musicbrainz_parts", "model": "musicbrainz", "score": 0.9,
+                proposals.append({"rule": "musicbrainz_parts", "origin": "external",
+                                  "originRef": f"https://musicbrainz.org/work/{pid}",
+                                  "model": "musicbrainz", "score": 0.9,
                                   "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{pid}"]},
                                   "proposal": {"action": "link_title", "titleName": ptitle, "tracks": tracks}})
 
@@ -426,6 +431,9 @@ def by_alias(songs, covered, args):
             composition["composers"] = people(w, "composer")
         proposals.append({
             "rule": "musicbrainz_alias",
+            # Our titles match the work's names: MusicBrainz does not say these are its recordings.
+            "origin": "name",
+            "originRef": f"https://musicbrainz.org/work/{wid}",
             "model": "musicbrainz",
             "score": 0.85 if len(titles) > 1 else 0.8,
             "evidence": {"source": "MusicBrainz", "works": [f"https://musicbrainz.org/work/{wid}"],

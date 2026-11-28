@@ -87,7 +87,8 @@ void add_suggestion_routes(ExtRouter& r) {
       Access::admin);
 
   // Estimates from outside (method "llm"): {"suggestions": [{rule, proposal, score,
-  // model?, evidence?}]}. With estimate.auto_apply_min_confidence > 0, confident ones
+  // model?, evidence?, origin?, originRef?}]}. origin says what the estimate rests on:
+  // external (an outside database states the link), audio, name, or llm (the default). With estimate.auto_apply_min_confidence > 0, confident ones
   // are applied at once as source 1 and marked auto_applied.
   r.add(
       "POST", "/ext/suggestions",
@@ -112,6 +113,13 @@ void add_suggestion_routes(ExtRouter& r) {
                   auto proposal = s.value("proposal", njson());
                   double score = s.value("score", 0.0);
                   if (score < 0 || score > 1) throw bad_request("score must be between 0 and 1");
+                  auto origin = s.value("origin", std::string("llm"));
+                  if (!valid_origin(origin)) throw bad_request("origin must be external, audio, name or llm");
+                  std::optional<std::string> origin_ref;
+                  if (s.contains("originRef") && !s["originRef"].is_null()) {
+                    if (!s["originRef"].is_string()) throw bad_request("originRef must be a string");
+                    origin_ref = s["originRef"].get<std::string>();
+                  }
                   validate_proposal(w, proposal);
                   auto digest = crypto::sha256("llm|" + rule + "|" + proposal.dump());
                   auto fingerprint = crypto::hex(digest.data(), 16);
@@ -124,11 +132,11 @@ void add_suggestion_routes(ExtRouter& r) {
                   bool apply = threshold > 0 && score >= threshold;
                   w.run(
                       "INSERT INTO suggestion (id, rule, method, model, evidence, fingerprint, payload, score, status, "
-                      "created_at, decided_at) VALUES (?, ?, 'llm', ?, ?, ?, ?, ?, ?, ?, ?)",
+                      "created_at, decided_at, origin, origin_ref) VALUES (?, ?, 'llm', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                       id, rule, s.contains("model") ? std::optional(s["model"].get<std::string>()) : std::nullopt,
                       s.contains("evidence") ? std::optional(s["evidence"].dump()) : std::nullopt, fingerprint,
                       proposal.dump(), score, apply ? "auto_applied" : "pending", db::now_ms(),
-                      apply ? std::optional(db::now_ms()) : std::nullopt);
+                      apply ? std::optional(db::now_ms()) : std::nullopt, origin, origin_ref);
                   if (apply) {
                     apply_proposal(w, proposal, 1, id);
                     ++auto_applied;

@@ -2,7 +2,7 @@
 
 楽曲・作品・関係などのつながり 1 本ごとに、「何を根拠にしたか」を持たせるための設計です。グラフの「確度の高いつながりだけ」（kleulir の Sure links）を、規則の名前ではなく出所で絞れるようにします。
 
-状態（2026-11-28）：**設計だけ**。まだ実装していません。今は代わりに、`/ext/graph` の `rules=`（候補の規則の名前で絞る）を使っています。
+状態（2026-11-28）：**実装済み**（マイグレーション 006、`/ext/graph` の `origin=`、`POST /ext/suggestions` の `origin`・`originRef`、書き出しと読み込み、`mb-match`・`audio-match`）。API の約束は [ext-api.md](ext-api.md) にあります。設計から変えた点は「実装で変えたこと」にまとめました。
 
 ## いまの問題
 
@@ -85,6 +85,22 @@ ALTER TABLE suggestion ADD COLUMN origin_ref TEXT;
 - **参照先を、曲ごとに持つか。** `link_arrangement` の候補 1 件は、複数の曲をまとめてつなぎます。曲ごとに根拠の録音が違うので、本当は曲ごとに `origin_ref` を持てます（候補に `originRefs: {曲 ID: URL}` を足す）。最初は候補単位（楽曲の URL）にします。
 - **楽曲・作品そのものの出所。** `composition` や `title` などの物にも `source` と `suggestion_id` があります。物の出所は、つながりの絞り込みには要らないので、今回は入れません。`composition.mbz_work_id` が、すでに外部の参照になっています。
 - **`method` の扱い。** `origin` があれば、`method`（`rule`・`llm`）はほぼ要らなくなります。互換のために残し、新しいコードでは `origin` を見ます。
+
+## 実装で変えたこと
+
+- **タグと手動の行には書き込まない。** 列は NULL のままにし、読むときに `source` から `tag`・`manual` を出します（`origin_of()`）。スキャンと編集 API の書き込みを全部直さずに済み、`source` と食い違うこともありません。そのため、列の CHECK は推定の 4 語（`external`・`audio`・`name`・`llm`）だけです。
+- **承認の最後に写す。** 承認で書く行は種類ごとに違う INSERT で作られるので、1 つずつ直す代わりに、承認の最後に「この候補が書いた推定の行（`suggestion_id` が同じで `source` 1）」へまとめて写します。編集して承認した行（手作業、3）には写しません。
+- **参与者（`participant`）の出所は書き出さない。** 書き出しは、楽曲の作曲者などを名前の一覧として運んでいて、行ごとの形を持たないためです。グラフの絞り込み（作曲者の辺）には、DB の中の値を使います。
+- **`rules=` は外した。** push する前だったので、`origin=` に置き換えました。辺の `rule` は残します。
+- `mb-match` は、`musicbrainz_work`・`musicbrainz_arrangement` の参照先を、その曲たちの楽曲（Work）にします。マイグレーションで埋めた古い行は、`evidence` の `works` の先頭（まとまりの代表）になっています。
+
+サンプル DB で当てた結果（006 のバックフィル）：
+
+| 表 | `external` | `name` | `audio` |
+| --- | --- | --- | --- |
+| `track_arrangement` | 94 | 407 | 92 |
+| `track_title` | 382 | 0 | 0 |
+| `relation` | 0 | 1 | 0 |
 
 ## 採らなかった案
 

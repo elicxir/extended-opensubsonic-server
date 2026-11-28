@@ -887,6 +887,8 @@ struct Approvals {
     json body = {{"suggestions",
                   json::array({{{"rule", "mb_match"},
                                 {"score", 0.8},
+                                {"origin", "external"},
+                                {"originRef", "https://musicbrainz.org/work/mbid-field"},
                                 {"proposal",
                                  {{"action", "link_arrangement"},
                                   {"composition", {{"name", "Field Theme"}, {"musicBrainzWorkId", "mbid-field"},
@@ -956,7 +958,7 @@ TEST_F(ExtTest, EmptiedCompositionStaysWhenSomethingPointsAtIt) {
   EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 200);
 }
 
-TEST_F(ExtTest, GraphKeepsOnlyTheRulesAskedFor) {
+TEST_F(ExtTest, GraphKeepsOnlyTheOriginsAskedFor) {
   Approvals a{*s};
   ASSERT_EQ(a.accept(a.title_match()), 200);
   const auto seed = "/ext/graph?seed=song:" + a.f1 + "&include=composition";
@@ -968,15 +970,52 @@ TEST_F(ExtTest, GraphKeepsOnlyTheRulesAskedFor) {
       if (e["type"] == "performance") out.push_back(e);
     return out;
   };
-  // Unfiltered, the estimated edge says which rule made it.
+  // Unfiltered, the estimated edge says which rule made it and what it rests on: the
+  // built-in rules match names.
   auto all = performances("");
   ASSERT_EQ(all.size(), 2u);
   EXPECT_EQ(all[0]["rule"], "same_composition");
-  // Only MusicBrainz: the title match goes, and with it the other song.
-  EXPECT_TRUE(performances("&rules=mb_match").empty());
-  EXPECT_TRUE(performances("&rules=").empty());  // empty: no estimates at all
+  EXPECT_EQ(all[0]["origin"], "name");
+  EXPECT_FALSE(all[0].contains("originRef"));
+  // Only what an outside database states: the title match goes, and with it the other song.
+  EXPECT_TRUE(performances("&origin=external,tag,manual").empty());
+  EXPECT_TRUE(performances("&origin=").empty());  // empty: nothing but computed links
+  EXPECT_EQ(s->get(seed + "&origin=guess").status, 400);
   ASSERT_EQ(a.accept(a.mb_link()), 200);
-  auto mb = performances("&rules=mb_match,musicbrainz_work");
+  auto mb = performances("&origin=external,tag,manual");
   ASSERT_EQ(mb.size(), 2u);
   EXPECT_EQ(mb[0]["rule"], "mb_match");
+  EXPECT_EQ(mb[0]["origin"], "external");
+  EXPECT_EQ(mb[0]["originRef"], "https://musicbrainz.org/work/mbid-field");
+}
+
+TEST_F(ExtTest, SuggestionsKeepTheirOrigin) {
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  auto post = [&](json extra) {
+    json one = {{"rule", "tool"}, {"score", 0.5},
+                {"proposal", {{"action", "link_title"}, {"titleName", "Field Game"}, {"tracks", {f1, f2}}}}};
+    one.update(extra);
+    return s->call("POST", "/ext/suggestions", json{{"suggestions", json::array({one})}});
+  };
+  // A word outside the list is refused for that item.
+  auto bad = post({{"origin", "tag"}});
+  EXPECT_TRUE(bad.body["created"].empty()) << bad.body.dump();
+  EXPECT_EQ(bad.body["errors"].size(), 1u);
+  // No origin: an LLM's guess, as before.
+  auto r = post(json::object());
+  ASSERT_EQ(r.status, 201) << r.body.dump();
+  auto id = r.body["created"][0].get<std::string>();
+  auto got = s->get("/ext/suggestions/" + id).body;
+  EXPECT_EQ(got["origin"], "llm");
+  EXPECT_TRUE(got["originRef"].is_null());
+
+  // Accepting copies it onto the rows, and an export carries it to the next database.
+  ASSERT_EQ(s->call("POST", "/ext/suggestions/" + id + "/accept").status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT origin FROM track_title WHERE track_id = ?", f1), "llm");
+  auto dump = s->get("/ext/export").body;
+  ASSERT_EQ(dump["trackTitles"].size(), 2u);
+  EXPECT_EQ(dump["trackTitles"][0]["origin"], "llm");
+  s->conn->exec("UPDATE track_title SET origin = NULL");
+  ASSERT_EQ(s->call("POST", "/ext/import", dump).status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT origin FROM track_title WHERE track_id = ?", f1), "llm");
 }

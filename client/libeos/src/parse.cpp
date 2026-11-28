@@ -271,6 +271,8 @@ Graph graph(const json& j) {
     edge.provenance = get<std::string>(e, "provenance");
     edge.confidence = opt<double>(e, "confidence");
     edge.rule = opt<std::string>(e, "rule");
+    edge.origin = opt<std::string>(e, "origin");
+    edge.origin_ref = opt<std::string>(e, "originRef");
     edge.arrangement_id = opt<std::string>(e, "arrangementId");
     edge.arrangement_name = opt<std::string>(e, "arrangementName");
     edge.arrangement_kind = opt<std::string>(e, "arrangementKind");

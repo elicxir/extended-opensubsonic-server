@@ -185,6 +185,7 @@ def proposal_for(original, arrangements, album_name, z, scored_by_track, min_z):
         proposal["originalTracks"] = [original["id"]]
     return {
         "rule": "audio_match",
+        "origin": "audio",
         "model": "chroma-qmax/1",
         "score": 0.9 if z >= min_z else 0.6,
         "evidence": {
