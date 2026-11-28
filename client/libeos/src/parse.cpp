@@ -291,4 +291,44 @@ Graph graph(const json& j) {
   return g;
 }
 
+LinkInfo link_info(const json& j) {
+  LinkInfo l;
+  l.provenance = get<std::string>(j, "provenance");
+  l.confidence = opt<double>(j, "confidence");
+  l.rule = opt<std::string>(j, "rule");
+  l.origin = opt<std::string>(j, "origin");
+  l.origin_ref = opt<std::string>(j, "originRef");
+  return l;
+}
+
+SongDetail song_detail(const json& j) {
+  SongDetail d;
+  d.song = song(object(j, "song"));
+  d.album = album(object(j, "album"));
+  d.composition = maybe(j, "composition", composition);
+  d.arrangement = maybe(j, "arrangement", arrangement);
+  d.arrangement_link = maybe(j, "arrangementLink", link_info);
+  d.titles = list(j, "titles", [](const json& t) {
+    return SongDetail::TitleLink{title(object(t, "title")), link_info(object(t, "link"))};
+  });
+  d.virtual_albums = list(j, "virtualAlbums", [](const json& v) {
+    return SongDetail::VirtualAlbumLink{album(object(v, "album")), link_info(object(v, "link")),
+                                        opt<int>(v, "discNumber"), opt<int>(v, "trackNumber")};
+  });
+  const json& f = object(j, "file");
+  d.file.library = get<std::string>(f, "library");
+  d.file.path = get<std::string>(f, "path");
+  d.file.size = get<int64_t>(f, "size");
+  d.file.modified = get<std::string>(f, "modified");
+  d.file.added = get<std::string>(f, "added");
+  d.file.updated = get<std::string>(f, "updated");
+  d.file.audio_md5 = opt<std::string>(f, "audioMd5");
+  d.file.has_embedded_art = get<bool>(f, "hasEmbeddedArt");
+  d.file.music_brainz_recording_id = opt<std::string>(f, "musicBrainzRecordingId");
+  d.file.music_brainz_track_id = opt<std::string>(f, "musicBrainzTrackId");
+  for (const auto& [key, values] : object(j, "tags").items())
+    d.tags.push_back({key, values.get<std::vector<std::string>>()});
+  return d;
+}
+
 }  // namespace eos::client::parse

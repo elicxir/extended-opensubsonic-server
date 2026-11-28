@@ -210,6 +210,60 @@ TEST_F(ExtTest, CompositionsAndVersions) {
   EXPECT_EQ(s->get("/ext/songs/nope/versions").status, 404);
 }
 
+TEST_F(ExtTest, SongDetail) {
+  auto d = s->get("/ext/songs/" + s->track("Box/02.flac") + "/detail").body;
+  EXPECT_EQ(d["song"]["title"], "Main Theme (Piano Ver.)");
+  EXPECT_EQ(d["album"]["name"], "Collection Box");
+  EXPECT_EQ(d["album"]["kind"], "physical");
+  EXPECT_EQ(d["composition"]["name"], "Main Theme");
+  EXPECT_EQ(d["composition"]["composers"][0]["name"], "Sato");
+  EXPECT_EQ(d["arrangement"]["name"], "Piano Ver.");
+  EXPECT_EQ(d["arrangement"]["arrangers"][0]["name"], "Suzuki");
+  EXPECT_EQ(d["arrangementLink"]["provenance"], "tag");
+  EXPECT_EQ(d["arrangementLink"]["origin"], "tag");
+  ASSERT_EQ(d["titles"].size(), 1u);
+  EXPECT_EQ(d["titles"][0]["title"]["name"], "Game X");
+  EXPECT_EQ(d["titles"][0]["link"]["provenance"], "tag");
+  ASSERT_EQ(d["virtualAlbums"].size(), 1u);
+  EXPECT_EQ(d["virtualAlbums"][0]["album"]["name"], "Game X Soundtrack");
+  EXPECT_EQ(d["virtualAlbums"][0]["album"]["kind"], "virtual");
+  EXPECT_EQ(d["virtualAlbums"][0]["link"]["provenance"], "tag");
+  EXPECT_TRUE(d["virtualAlbums"][0].contains("discNumber"));
+  EXPECT_EQ(d["virtualAlbums"][0]["trackNumber"], 2);
+  EXPECT_EQ(d["file"]["library"], "Music");
+  EXPECT_EQ(d["file"]["path"], "Box/02.flac");
+  EXPECT_GT(d["file"]["size"].get<int64_t>(), 0);
+  EXPECT_EQ(d["file"]["modified"].get<std::string>().size(), 24u);
+  EXPECT_TRUE(d["file"]["audioMd5"].is_string());
+  EXPECT_EQ(d["tags"]["ARRANGEMENT"], json::array({"Piano Ver."}));
+  EXPECT_EQ(d["tags"]["COLLECTION_WORK"], json::array({"Game X"}));
+
+  // A song nothing is known about: the links are null or empty, never missing.
+  auto plain = s->get("/ext/songs/" + s->track("Other/01.flac") + "/detail").body;
+  EXPECT_TRUE(plain["titles"].empty());
+  EXPECT_TRUE(plain["virtualAlbums"].empty());
+  EXPECT_TRUE(plain.contains("composition") && plain.contains("arrangement") && plain.contains("arrangementLink"));
+
+  // An estimated link says how sure it is and what it rests on; includeEstimated=false hides it.
+  auto pending = s->get("/ext/suggestions?rule=same_composition").body["items"];
+  ASSERT_FALSE(pending.empty());
+  std::string sid = pending[0]["id"];
+  ASSERT_EQ(s->call("POST", "/ext/suggestions/" + sid + "/accept").status, 200);
+  const std::string member = s->track("Other/02.flac");
+  auto est = s->get("/ext/songs/" + member + "/detail").body;
+  EXPECT_EQ(est["composition"]["name"], "Field");
+  EXPECT_EQ(est["arrangementLink"]["provenance"], "rule");
+  EXPECT_EQ(est["arrangementLink"]["rule"], "same_composition");
+  EXPECT_EQ(est["arrangementLink"]["origin"], "name");
+  EXPECT_TRUE(est["arrangementLink"]["confidence"].is_number());
+  auto sure = s->get("/ext/songs/" + member + "/detail?includeEstimated=false").body;
+  EXPECT_TRUE(sure["arrangementLink"].is_null());
+  EXPECT_TRUE(sure["composition"].is_null());
+  EXPECT_EQ(s->get("/ext/songs/nope/detail").status, 404);
+  auto features = s->get("/ext/info").body["features"];
+  EXPECT_NE(std::find(features.begin(), features.end(), "songDetail"), features.end());
+}
+
 TEST_F(ExtTest, AcceptAndRejectSuggestions) {
   auto list = s->get("/ext/suggestions").body;
   EXPECT_EQ(list["total"], 3);  // derivative, medley, same_composition

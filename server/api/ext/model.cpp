@@ -45,6 +45,15 @@ bool valid_origin(const std::string& origin) {
   return origin == "external" || origin == "audio" || origin == "name" || origin == "llm";
 }
 
+json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col) {
+  json j = {{"provenance", provenance(source, method)}};
+  if (source == 1 && !st.is_null(col)) j["confidence"] = st.real(col);
+  if (source == 1 && !st.is_null(col + 1)) j["rule"] = st.text(col + 1);
+  if (auto o = origin_of(source, st.opt_text(col + 2))) j["origin"] = *o;
+  if (source == 1 && !st.is_null(col + 3)) j["originRef"] = st.text(col + 3);
+  return j;
+}
+
 bool exists(db::Connection& db, const char* table, const std::string& id) {
   return db.scalar_int(std::format("SELECT 1 FROM {} WHERE id = ?", table), id).has_value();
 }

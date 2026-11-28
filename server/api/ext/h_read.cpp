@@ -74,7 +74,7 @@ void add_read_routes(ExtRouter& r) {
                {"serverVersion", EOS_VERSION},
                {"features",
                 {"folders", "titles", "compositions", "relations", "virtualAlbums", "suggestions", "search",
-                 "overrides", "apiKeys", "export", "graph", "similarity"}}});
+                 "overrides", "apiKeys", "export", "graph", "similarity", "songDetail"}}});
   });
 
   r.add("GET", "/ext/scan", [](ExtCtx& c) {
@@ -265,6 +265,102 @@ void add_read_routes(ExtRouter& r) {
       for (auto& rel : relations_of(c.db, "composition", comp, min))
         related.push_back({{"relation", rel}, {"target", target_of(c, rel, comp)}});
     j["related"] = std::move(related);
+    return ok(j);
+  });
+
+  // Everything known about one song, for a details screen: what it is linked to with the
+  // names and where each link came from, the file, and the tags as they are in the file.
+  r.add("GET", "/ext/songs/{}/detail", [](ExtCtx& c) {
+    const auto& id = c.args[0];
+    require_track(c.db, id);
+    const int min = c.min_source();
+    json j = {{"song", songs(c, {id})[0]}};
+    j["album"] = albums(c, {j["song"]["albumId"].get<std::string>()})[0];
+
+    j["composition"] = nullptr;
+    j["arrangement"] = nullptr;
+    j["arrangementLink"] = nullptr;
+    {
+      auto st = c.db.prepare(
+          "SELECT ta.arrangement_id, a.composition_id, ta.source, s.method, s.score, s.rule, ta.origin, ta.origin_ref "
+          "FROM track_arrangement ta JOIN arrangement a ON a.id = ta.arrangement_id "
+          "LEFT JOIN suggestion s ON s.id = ta.suggestion_id "
+          "WHERE ta.track_id = ? AND ta.source >= ? ORDER BY ta.source DESC LIMIT 1");
+      st.bind_all(id, min);
+      if (st.step()) {
+        const auto arrangement = st.text(0), comp = st.text(1);
+        j["arrangementLink"] = prov_fields(st.int64(2), st.opt_text(3), st, 4);
+        j["arrangement"] = arrangement_json(c.db, arrangement);
+        j["composition"] = composition_json(c.db, comp);
+      }
+    }
+
+    // The strongest row of each work gives its link.
+    json titles = json::array();
+    {
+      std::vector<std::pair<std::string, json>> rows;
+      auto st = c.db.prepare(
+          "SELECT tt.title_id, MAX(tt.source), s.method, s.score, s.rule, tt.origin, tt.origin_ref "
+          "FROM track_title tt JOIN title ti ON ti.id = tt.title_id "
+          "LEFT JOIN suggestion s ON s.id = tt.suggestion_id "
+          "WHERE tt.track_id = ?1 AND tt.excluded = 0 AND tt.source >= ?2 AND NOT EXISTS ("
+          "  SELECT 1 FROM track_title x WHERE x.track_id = tt.track_id AND x.title_id = tt.title_id "
+          "  AND x.excluded = 1) GROUP BY tt.title_id ORDER BY COALESCE(ti.sort_name, ti.name), tt.title_id");
+      st.bind_all(id, min);
+      while (st.step()) rows.emplace_back(st.text(0), prov_fields(st.int64(1), st.opt_text(2), st, 3));
+      for (auto& [title, link] : rows) titles.push_back({{"title", title_json(c.db, title)}, {"link", std::move(link)}});
+    }
+    j["titles"] = std::move(titles);
+    // The virtual albums the song is on, with its place there. The strongest row of each
+    // album gives the link.
+    json virtual_albums = json::array();
+    {
+      struct Row {
+        std::string album;
+        json rest;
+      };
+      std::vector<Row> rows;
+      auto st = c.db.prepare(
+          "SELECT at.album_id, MAX(at.source), s.method, s.score, s.rule, at.origin, at.origin_ref, "
+          "at.disc_number, at.track_number FROM album_track at JOIN album al ON al.id = at.album_id "
+          "LEFT JOIN suggestion s ON s.id = at.suggestion_id "
+          "WHERE at.track_id = ?1 AND at.excluded = 0 AND at.source >= ?2 AND al.missing = 0 AND NOT EXISTS ("
+          "  SELECT 1 FROM album_track x WHERE x.track_id = at.track_id AND x.album_id = at.album_id "
+          "  AND x.excluded = 1) GROUP BY at.album_id ORDER BY COALESCE(al.sort_name, al.name), at.album_id");
+      st.bind_all(id, min);
+      while (st.step())
+        rows.push_back({st.text(0),
+                        {{"link", prov_fields(st.int64(1), st.opt_text(2), st, 3)},
+                         {"discNumber", st.opt_int64(7) ? json(*st.opt_int64(7)) : json(nullptr)},
+                         {"trackNumber", st.opt_int64(8) ? json(*st.opt_int64(8)) : json(nullptr)}}});
+      for (auto& row : rows) {
+        auto found = albums(c, {row.album});
+        if (found.empty()) continue;
+        row.rest["album"] = std::move(found[0]);
+        virtual_albums.push_back(std::move(row.rest));
+      }
+    }
+    j["virtualAlbums"] = std::move(virtual_albums);
+
+    auto st = c.db.prepare(
+        "SELECT l.name, t.path, t.size, t.mtime, t.created_at, t.updated_at, t.audio_md5, t.has_embedded_art, "
+        "t.mbz_recording_id, t.mbz_track_id, t.tags_json FROM track t JOIN library l ON l.id = t.library_id "
+        "WHERE t.id = ?");
+    st.bind(1, id);
+    st.step();
+    auto text_or_null = [&](int col) { return st.is_null(col) ? json(nullptr) : json(st.text(col)); };
+    j["file"] = {{"library", st.text(0)},
+                 {"path", st.text(1)},
+                 {"size", st.int64(2)},
+                 {"modified", iso_time(st.int64(3))},
+                 {"added", iso_time(st.int64(4))},
+                 {"updated", iso_time(st.int64(5))},
+                 {"audioMd5", text_or_null(6)},
+                 {"hasEmbeddedArt", st.int64(7) != 0},
+                 {"musicBrainzRecordingId", text_or_null(8)},
+                 {"musicBrainzTrackId", text_or_null(9)}};
+    auto tags = json::parse(st.text(10), nullptr, false);
+    j["tags"] = tags.is_object() ? std::move(tags) : json::object();
     return ok(j);
   });
 

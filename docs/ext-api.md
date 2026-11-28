@@ -45,7 +45,7 @@
 
 | メソッドとパス | 返すもの |
 | --- | --- |
-| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features`（グラフがあれば `graph` を含みます） |
+| `GET /ext/info` | `apiVersion`（1）、`serverVersion`、`features`（グラフがあれば `graph`、曲の詳細があれば `songDetail` を含みます） |
 | `GET /ext/scan` | `scanning`、`phase`、`count`、`folderCount`、`last`（直近のスキャンの件数） |
 | `GET /ext/folders` | 全フォルダの平らな一覧（`id`、`name`、`parentId`、`sortOrder`、`albumCount`、`childCount`、`provenance`）。木はクライアントが組みます |
 | `GET /ext/folders/{id}` | `folder`、`children`（直下のフォルダ）、`albums` |
@@ -58,6 +58,7 @@
 | `GET /ext/compositions/{id}` | `composition`（作曲者付き）、`arrangements`（`{"arrangement", "songs"}`）、`relations` |
 | `GET /ext/songs/{id}` | 曲 |
 | `GET /ext/songs/{id}/versions` | 下記 |
+| `GET /ext/songs/{id}/detail` | 下記。曲の詳細（紐付いているものの名前と出どころ、ファイル、タグ） |
 | `GET /ext/search?q=` | 下記 |
 | `GET /ext/graph?seed=` | 下記。関連する曲のグラフ（節と辺） |
 | `GET /ext/suggestions?status=&rule=&method=` | 候補の一覧。`status` の既定は `pending`。確信度の高い順 |
@@ -84,6 +85,34 @@
 - `arrangements`：同じ楽曲の、この曲以外の編曲（曲のあるものだけ）。
 - `performances`：同じ編曲の、この曲以外の曲。
 - `related`：この曲と、この曲の楽曲に付いた関係。`direction` は、この曲（または楽曲）が `from` 側なら `out`、`to` 側なら `in`。`target` は相手で、曲なら `song`、楽曲なら `composition`。
+
+### `GET /ext/songs/{id}/detail`
+
+曲の詳細画面のための呼び出しです。その曲について分かっていることを 1 回で返します。同じ楽曲のほかの曲は返しません（`versions` を使います）。
+
+```json
+{
+  "song": { "id": "…", "title": "…", "compositionId": "c1", "arrangementId": "a2", … },
+  "album": { "id": "…", "name": "…", "kind": "physical", "provenance": "tag", … },
+  "composition": { "id": "c1", "name": "…", "composers": [{"id": "…", "name": "…"}], "provenance": "tag" },
+  "arrangement": { "id": "a2", "name": "Piano Ver.", "kind": "piano", "isImplicit": false, "arrangers": [ … ], "provenance": "tag" },
+  "arrangementLink": { "provenance": "rule", "confidence": 0.9, "rule": "same_composition", "origin": "name" },
+  "titles": [ { "title": { "id": "…", "name": "Game X", "kind": null, "year": null, "provenance": "tag" }, "link": { "provenance": "tag", "origin": "tag" } } ],
+  "virtualAlbums": [ { "album": { "id": "…", "name": "…", "kind": "virtual", … }, "link": { "provenance": "tag", "origin": "tag" },
+                       "discNumber": null, "trackNumber": 2 } ],
+  "file": { "library": "Music", "path": "Box/02.flac", "size": 12345678, "modified": "…", "added": "…", "updated": "…",
+            "audioMd5": "…", "hasEmbeddedArt": true, "musicBrainzRecordingId": null, "musicBrainzTrackId": null },
+  "tags": { "TITLE": ["…"], "ARTIST": ["…", "…"] }
+}
+```
+
+- `album`：曲の物理アルバム。
+- `composition`、`arrangement`、`arrangementLink`：曲が入っている編曲と、その楽曲。楽曲が決まっていない曲では 3 つとも `null`。
+- `arrangementLink`、`titles[].link`、`virtualAlbums[].link`：その紐付けの出どころ。`provenance` は必ずあり、推定のときは `confidence`（候補の確信度）と `rule`、分かっていれば `origin` と `originRef` が付きます（`/ext/graph` の辺と同じ項目）。`arrangement.provenance` は編曲そのものの出どころで、この曲との紐付けの出どころとは別です。
+- `titles`：曲が属する作品（読みの順）。`virtualAlbums`：曲を含む仮想アルバム（読みの順）と、その中でのディスク番号と曲番号（決まっていなければ `null`）。どちらも、なければ空の配列。
+- `file`：`path` はライブラリ（`library`）のフォルダからの相対パス。`added` は曲が最初にスキャンされた時刻、`updated` は最後に読み直した時刻、`modified` はファイルの更新時刻。`audioMd5` は FLAC の音声の MD5（ほかの形式では `null`）。
+- `tags`：ファイルのタグそのまま。キーは大文字、値は文字列の配列（ファイルの中の順）。手作業の上書きは `song` に反映され、`tags` には反映されません。
+- `includeEstimated=false` を付けると、推定の紐付けを除いて答えます。
 
 ### `GET /ext/search?q=`
 

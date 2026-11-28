@@ -16,6 +16,10 @@ std::string provenance(int64_t source, const std::optional<std::string>& method)
 std::optional<std::string> origin_of(int64_t source, const std::optional<std::string>& origin);
 // The origins a suggestion may give (estimates only).
 bool valid_origin(const std::string& origin);
+// Where a link came from, as the fields of its JSON: provenance, and when known
+// confidence, rule, origin and originRef. Columns from `col` on: the suggestion's score
+// and rule, then the row's origin and origin_ref (each NULL when none).
+json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col);
 
 // Songs as OpenSubsonic Child objects plus compositionId, arrangementId,
 // arrangementProvenance, titleIds, virtualAlbumIds, performanceKind, recordedDate.

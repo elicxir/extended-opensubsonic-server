@@ -274,6 +274,53 @@ struct SongVersions {
   std::vector<RelatedItem> related;
 };
 
+// Where a link came from (docs/link-origin.md).
+struct LinkInfo {
+  std::string provenance;            // manual, tag, rule, llm
+  std::optional<double> confidence;  // estimated links only
+  std::optional<std::string> rule;   // estimated links: the suggestion's rule
+  // What the link rests on: tag, manual, external, audio, name, llm; none when not known.
+  std::optional<std::string> origin;
+  std::optional<std::string> origin_ref;  // where to look it up, e.g. a MusicBrainz URL
+};
+
+struct SongFile {
+  std::string library, path;  // path is relative to the library's folder
+  int64_t size = 0;
+  std::string modified, added, updated;  // the file's time, first scan, last re-read
+  std::optional<std::string> audio_md5;  // FLAC only
+  bool has_embedded_art = false;
+  std::optional<std::string> music_brainz_recording_id, music_brainz_track_id;
+};
+
+struct SongTag {
+  std::string key;  // upper case
+  std::vector<std::string> values;
+};
+
+// GET /ext/songs/{id}/detail: everything known about one song.
+struct SongDetail {
+  struct TitleLink {
+    Title title;
+    LinkInfo link;
+  };
+  struct VirtualAlbumLink {
+    Album album;
+    LinkInfo link;
+    std::optional<int> disc_number, track_number;  // the song's place on that album
+  };
+  Song song;
+  Album album;  // the physical album
+  // The arrangement the song is in and its composition; all three are none together.
+  std::optional<Composition> composition;
+  std::optional<Arrangement> arrangement;
+  std::optional<LinkInfo> arrangement_link;  // how the song came to be in that arrangement
+  std::vector<TitleLink> titles;
+  std::vector<VirtualAlbumLink> virtual_albums;
+  SongFile file;
+  std::vector<SongTag> tags;  // as in the file, by key
+};
+
 struct ExtSearchResult {
   struct CompositionHit {
     Composition composition;

@@ -179,6 +179,8 @@ class Api {
   CompositionDetail composition(const std::string& id);
   Song ext_song(const std::string& id);
   SongVersions song_versions(const std::string& song_id);
+  // The song with the names of what it is linked to, its file and its tags.
+  SongDetail song_detail(const std::string& song_id);
   ExtSearchResult ext_search(const std::string& q, int limit = 20);  // per kind
   // Related songs as a graph around q.seed (GET /ext/graph). An unknown seed throws not_found.
   Graph graph(const GraphQuery& q);

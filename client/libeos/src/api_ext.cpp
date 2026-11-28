@@ -161,6 +161,11 @@ SongVersions Api::song_versions(const std::string& song_id) {
   });
 }
 
+SongDetail Api::song_detail(const std::string& song_id) {
+  auto j = impl_->ext_get("/ext/songs/" + seg(song_id) + "/detail");
+  return parsed("/ext/songs/{id}/detail", [&] { return parse::song_detail(j); });
+}
+
 ExtSearchResult Api::ext_search(const std::string& q, int limit) {
   auto j = impl_->ext_get("/ext/search", {{"q", q}, {"limit", std::to_string(limit)}});
   return parsed("/ext/search", [&] {

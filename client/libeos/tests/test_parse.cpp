@@ -198,6 +198,54 @@ TEST(Parse, Graph) {
   EXPECT_TRUE(other.edges.empty());
 }
 
+TEST(Parse, SongDetail) {
+  auto d = parse::song_detail(json::parse(R"j({
+    "song": {"id": "s1", "title": "Main Theme (Piano Ver.)", "compositionId": "c1", "arrangementId": "a2"},
+    "album": {"id": "al1", "name": "Collection Box", "kind": "physical"},
+    "composition": {"id": "c1", "name": "Main Theme", "composers": [{"id": "p1", "name": "Sato"}], "provenance": "tag"},
+    "arrangement": {"id": "a2", "compositionId": "c1", "name": "Piano Ver.", "kind": "piano", "isImplicit": false,
+                    "arrangers": [{"id": "p2", "name": "Suzuki"}], "provenance": "tag"},
+    "arrangementLink": {"provenance": "rule", "confidence": 0.9, "rule": "same_composition", "origin": "name"},
+    "titles": [{"title": {"id": "t1", "name": "Game X", "provenance": "tag"}, "link": {"provenance": "tag", "origin": "tag"}}],
+    "virtualAlbums": [{"album": {"id": "al2", "name": "Game X Soundtrack", "kind": "virtual"},
+                       "link": {"provenance": "manual", "origin": "manual"}, "discNumber": null, "trackNumber": 2}],
+    "file": {"library": "Music", "path": "Box/02.flac", "size": 1234, "modified": "2026-01-02T03:04:05.000Z",
+             "added": "2026-01-03T00:00:00.000Z", "updated": "2026-01-04T00:00:00.000Z", "audioMd5": "abc",
+             "hasEmbeddedArt": true, "musicBrainzRecordingId": null, "musicBrainzTrackId": null},
+    "tags": {"TITLE": ["Main Theme (Piano Ver.)"], "ARTIST": ["A", "B"]}
+  })j"));
+  EXPECT_EQ(d.song.id, "s1");
+  EXPECT_EQ(d.album.name, "Collection Box");
+  ASSERT_TRUE(d.composition && d.arrangement && d.arrangement_link);
+  EXPECT_EQ(d.composition->composers[0].name, "Sato");
+  EXPECT_EQ(d.arrangement->arrangers[0].name, "Suzuki");
+  EXPECT_EQ(d.arrangement_link->provenance, "rule");
+  EXPECT_EQ(d.arrangement_link->confidence, 0.9);
+  EXPECT_EQ(d.arrangement_link->rule, "same_composition");
+  EXPECT_FALSE(d.arrangement_link->origin_ref);
+  ASSERT_EQ(d.titles.size(), 1u);
+  EXPECT_EQ(d.titles[0].title.name, "Game X");
+  EXPECT_EQ(d.titles[0].link.origin, "tag");
+  ASSERT_EQ(d.virtual_albums.size(), 1u);
+  EXPECT_EQ(d.virtual_albums[0].album.kind, "virtual");
+  EXPECT_EQ(d.virtual_albums[0].link.provenance, "manual");
+  EXPECT_FALSE(d.virtual_albums[0].disc_number);
+  EXPECT_EQ(d.virtual_albums[0].track_number, 2);
+  EXPECT_EQ(d.file.path, "Box/02.flac");
+  EXPECT_EQ(d.file.size, 1234);
+  EXPECT_EQ(d.file.audio_md5, "abc");
+  EXPECT_TRUE(d.file.has_embedded_art);
+  EXPECT_FALSE(d.file.music_brainz_recording_id);
+  ASSERT_EQ(d.tags.size(), 2u);
+  EXPECT_EQ(d.tags[0].key, "ARTIST");
+  EXPECT_EQ(d.tags[0].values.size(), 2u);
+
+  auto bare = parse::song_detail(json::parse(R"({"song": {"id": "s2"}, "composition": null, "arrangement": null,
+    "arrangementLink": null, "titles": [], "virtualAlbums": [], "file": {}, "tags": {}})"));
+  EXPECT_FALSE(bare.composition || bare.arrangement || bare.arrangement_link);
+  EXPECT_TRUE(bare.tags.empty());
+}
+
 TEST(Parse, WrongTypeThrows) {
   EXPECT_THROW(parse::song(json::parse(R"({"id": 5})")), json::exception);
 }

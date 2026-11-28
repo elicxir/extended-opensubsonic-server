@@ -336,6 +336,18 @@ TEST_F(Live, ExtCompositionsVersionsSearchPreferred) {
   EXPECT_EQ(versions.arrangements[0].songs[0].title, "メインテーマ (Piano)");
   EXPECT_TRUE(versions.performances.empty());
 
+  auto song_detail = api.song_detail(opening.id);
+  EXPECT_EQ(song_detail.song.id, opening.id);
+  ASSERT_TRUE(song_detail.composition && song_detail.arrangement && song_detail.arrangement_link);
+  EXPECT_EQ(song_detail.composition->id, comp.id);
+  EXPECT_TRUE(song_detail.arrangement->is_implicit);
+  EXPECT_EQ(song_detail.arrangement_link->provenance, "tag");
+  EXPECT_EQ(song_detail.album.id, opening.album_id);
+  EXPECT_EQ(song_detail.titles.size(), 1u);
+  EXPECT_FALSE(song_detail.file.path.empty());
+  EXPECT_GT(song_detail.file.size, 0);
+  EXPECT_FALSE(song_detail.tags.empty());
+
   auto found = api.ext_search("main theme");
   ASSERT_EQ(found.compositions.size(), 1u);
   EXPECT_EQ(found.compositions[0].songs.size(), 2u);

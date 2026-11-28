@@ -47,17 +47,6 @@ std::pair<std::string, std::string> split_node(const std::string& node) {
   return {node.substr(0, p), node.substr(p + 1)};
 }
 
-// Columns from `col` on: the suggestion's score and rule, then the row's origin and
-// origin_ref (each NULL when none).
-json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int col) {
-  json j = {{"provenance", provenance(source, method)}};
-  if (source == 1 && !st.is_null(col)) j["confidence"] = st.real(col);
-  if (source == 1 && !st.is_null(col + 1)) j["rule"] = st.text(col + 1);
-  if (auto o = origin_of(source, st.opt_text(col + 2))) j["origin"] = *o;
-  if (source == 1 && !st.is_null(col + 3)) j["originRef"] = st.text(col + 3);
-  return j;
-}
-
 // ?origin=: keep only the links that rest on one of these (external, audio, name, llm,
 // tag, manual). Computed links (similar) are always kept.
 using Origins = std::optional<std::set<std::string>>;

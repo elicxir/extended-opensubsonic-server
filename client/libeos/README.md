@@ -21,6 +21,9 @@ std::string url = api.stream_url(album.songs[0].id);  // mpv に IPC で渡す
 // 関連する曲のグラフ（節と辺）。開いていない節（expanded == false）は、その id を seed にして呼び直す
 Graph g = api.graph({.seed = "song:" + album.songs[0].id});
 Graph more = api.graph({.seed = g.nodes[1].id, .depth = 1});
+
+// 曲の詳細：楽曲・編曲・作品の名前と出どころ、ファイル、タグ
+SongDetail d = api.song_detail(album.songs[0].id);
 ```
 
 - eos ではない OpenSubsonic サーバー（Navidrome など）には `Api::token_login()` で入ります。返ってきた `username`、`token`、`salt` を `Options` に入れると、`/rest` の呼び出しがトークン認証（`u`、`t`、`s`）で通ります。`/ext` はありません。
