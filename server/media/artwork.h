@@ -19,6 +19,7 @@ struct Image {
 //   album: an image file in the album folder (artwork.album_files order), else the
 //          embedded picture of the album's first track
 //   track: the track's embedded picture, else its album's art
+//   artist: the picture stored for the artist, if any
 // Resized images are JPEG, cached under <data_dir>/cache/artwork.
 class Artwork {
  public:
@@ -26,6 +27,8 @@ class Artwork {
 
   std::optional<Image> album(db::Connection& db, const std::string& album_id, int size);
   std::optional<Image> track(db::Connection& db, const std::string& track_id, int size);
+  // The picture an artist was given (artist_image); none for the others.
+  std::optional<Image> artist(db::Connection& db, const std::string& artist_id, int size);
 
   static std::optional<Image> embedded(const std::filesystem::path& file);
   // Longest side becomes `size` (never enlarges). Returns nullopt if not decodable.

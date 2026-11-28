@@ -191,6 +191,15 @@ void Artwork::evict_if_needed() {
   }
 }
 
+std::optional<Image> Artwork::artist(db::Connection& db, const std::string& artist_id, int size) {
+  auto st = db.prepare("SELECT mime, data, updated_at FROM artist_image WHERE artist_id = ?");
+  st.bind(1, artist_id);
+  if (!st.step()) return std::nullopt;
+  const auto bytes = st.blob(1);
+  Image img{st.text(0), std::string(bytes.begin(), bytes.end())};
+  return finish(std::move(img), "artist|" + artist_id + "|" + std::to_string(st.int64(2)), size);
+}
+
 std::optional<Image> Artwork::album(db::Connection& db, const std::string& album_id, int size) {
   auto st = db.prepare(
       "SELECT l.path, al.dir_path FROM album al JOIN library l ON l.id = al.library_id WHERE al.id = ?");

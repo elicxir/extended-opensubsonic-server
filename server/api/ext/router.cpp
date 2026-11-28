@@ -96,6 +96,7 @@ ExtRouter::ExtRouter(Services& svc) : svc_(svc) {
   add_transfer_routes(*this);
   add_graph_routes(*this);
   add_similarity_routes(*this);
+  add_artist_image_routes(*this);
 }
 
 void ExtRouter::add(const std::string& method, const std::string& pattern, ExtHandler h, Access access) {

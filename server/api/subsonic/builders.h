@@ -19,6 +19,7 @@ std::string visible_album_sql(bool show_virtual, const std::string& alias = "al"
 
 std::string album_cover_id(const std::string& album_id, int64_t updated_ms);
 std::string track_cover_id(const std::string& track_id, int64_t updated_ms);
+std::string artist_cover_id(const std::string& artist_id, int64_t updated_ms);
 
 // Loads Child / AlbumID3 / ArtistID3 elements for a list of ids, keeping the order
 // (and duplicates) of `ids`. Ids that do not exist are skipped. Missing tracks and

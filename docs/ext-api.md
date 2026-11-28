@@ -349,6 +349,28 @@
 - 一覧の 1 件：`{"kind", "model", "params", "trackCount", "pairCount", "createdAt"}`（`createdAt` は UNIX ミリ秒）
 - 曲が削除される（`purge`）と、その曲の組も消えます。`missing` の曲の組は残ります。
 
+## アーティストの画像
+
+アーティストの写真やロゴを、出どころと一緒に保存します。サーバーは画像を自分では探しません。手作業か、候補を探すツールが登録します。配信は `/rest/getCoverArt`（`id` はアーティストの `coverArt`）です。
+
+| メソッドとパス | 本文 | 説明 |
+| --- | --- | --- |
+| `GET /ext/artists` | | 全アーティストの一覧（`items`、読みの順）：`id`、`name`、`sortName`、`musicBrainzId`、`roles`（`albumartist`・`artist`・`composer` など）、画像があれば `coverArt`。`getArtists` はアルバムアーティストだけなので、作曲者や演奏者はここで探します |
+| `GET /ext/artist-images` | | 画像のあるアーティストの一覧（`items`、読みの順） |
+| `GET /ext/artists/{id}/image` | | 画像の情報。画像がなければ 404 |
+| `PUT /ext/artists/{id}/image`（管理者） | `data`（画像を base64 で）、`sourceUrl?`、`license?`、`credit?` | 画像を置き換える。JPEG・PNG・GIF・WebP、10 MB まで |
+| `DELETE /ext/artists/{id}/image`（管理者） | | 画像を消す |
+
+```json
+{ "artistId": "…", "coverArt": "ar-…_1795870683", "mime": "image/jpeg", "size": 183422,
+  "sourceUrl": "https://commons.wikimedia.org/wiki/File:…", "license": "CC BY-SA 4.0", "credit": "…", "updated": "…" }
+```
+
+- 画像は送られたまま保存し、`getCoverArt` の `size` に合わせて縮めます（ほかのジャケットと同じキャッシュ）。
+- `sourceUrl`・`license`・`credit` は表示と再配布のための控えです。サーバーは中身を確かめません。
+- 画像は書き出し（`/ext/export`）に入りません。データベースのバックアップには入ります。
+- `/ext/info` の `features` に `artistImages` があれば使えます。
+
 ## WebSocket
 
 `GET /ext/session`：共有リモコンの WebSocket です。[sync.md](sync.md) を見てください。

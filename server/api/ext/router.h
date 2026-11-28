@@ -106,6 +106,7 @@ void add_account_routes(ExtRouter& r);
 void add_transfer_routes(ExtRouter& r);
 void add_graph_routes(ExtRouter& r);
 void add_similarity_routes(ExtRouter& r);
+void add_artist_image_routes(ExtRouter& r);
 
 Response json_response(int status, const json& body);
 Response error_response(const ExtError& e);

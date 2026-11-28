@@ -11,6 +11,7 @@
 #include "core/config.h"
 #include "db/migrate.h"
 #include "fixtures.h"
+#include "media/artwork.h"
 #include "scanner/scanner.h"
 
 using namespace eos;
@@ -782,6 +783,55 @@ TEST_F(ExtTest, GraphPeopleAndAlbumsOnRequest) {
   ASSERT_NE(first, nullptr);
   EXPECT_EQ((*first)["degree"], 2);  // also in the virtual album "Game X Soundtrack"
   EXPECT_EQ((*first)["expanded"], false);
+}
+
+TEST_F(ExtTest, ArtistImages) {
+  const std::string artist = s->conn->scalar_text("SELECT id FROM artist WHERE name = 'Kato'").value_or("");
+  ASSERT_FALSE(artist.empty());
+  // The smallest PNG there is (1x1).
+  const std::string png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  EXPECT_EQ(s->get("/ext/artists/" + artist + "/image").status, 404);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/" + artist + "/image", json{{"data", png}}, &s->user_key).status, 403);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/" + artist + "/image", json{{"data", "aGVsbG8="}}).status, 400);
+  EXPECT_EQ(s->call("PUT", "/ext/artists/nope/image", json{{"data", png}}).status, 404);
+
+  auto put = s->call("PUT", "/ext/artists/" + artist + "/image",
+                     json{{"data", png}, {"sourceUrl", "https://example.org/kato"}, {"license", "CC BY-SA 4.0"}});
+  ASSERT_EQ(put.status, 200);
+  EXPECT_EQ(put.body["mime"], "image/png");
+  EXPECT_EQ(put.body["license"], "CC BY-SA 4.0");
+  EXPECT_TRUE(put.body["credit"].is_null());
+  EXPECT_EQ(put.body["coverArt"].get<std::string>().rfind("ar-" + artist + "_", 0), 0u);
+
+  bool listed = false;
+  const auto everyone = s->get("/ext/artists").body["items"];
+  for (const auto& a : everyone) {
+    if (a["id"] != artist) {
+      EXPECT_FALSE(a.contains("coverArt"));
+      continue;
+    }
+    listed = true;
+    EXPECT_EQ(a["name"], "Kato");
+    EXPECT_EQ(a["coverArt"], put.body["coverArt"]);
+    EXPECT_NE(std::find(a["roles"].begin(), a["roles"].end(), "composer"), a["roles"].end());
+  }
+  EXPECT_TRUE(listed);
+  auto got = s->get("/ext/artists/" + artist + "/image", &s->user_key);
+  EXPECT_EQ(got.body["sourceUrl"], "https://example.org/kato");
+  auto all = s->get("/ext/artist-images").body["items"];
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_EQ(all[0]["artistId"], artist);
+
+  media::Artwork art(s->cfg);
+  auto img = art.artist(*s->conn, artist, 0);
+  ASSERT_TRUE(img);
+  EXPECT_EQ(img->mime, "image/png");
+  EXPECT_FALSE(art.artist(*s->conn, "nope", 0));
+
+  EXPECT_EQ(s->call("DELETE", "/ext/artists/" + artist + "/image").status, 204);
+  EXPECT_EQ(s->get("/ext/artists/" + artist + "/image").status, 404);
+  EXPECT_TRUE(s->get("/ext/artist-images").body["items"].empty());
 }
 
 TEST_F(ExtTest, SimilarityReplacedOneKindAtATime) {

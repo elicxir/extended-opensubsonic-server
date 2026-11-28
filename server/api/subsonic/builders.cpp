@@ -92,6 +92,9 @@ std::string visible_album_sql(bool show_virtual, const std::string& a) {
 std::string album_cover_id(const std::string& album_id, int64_t updated_ms) {
   return std::format("al-{}_{}", album_id, updated_ms / 1000);
 }
+std::string artist_cover_id(const std::string& artist_id, int64_t updated_ms) {
+  return std::format("ar-{}_{}", artist_id, updated_ms / 1000);
+}
 std::string track_cover_id(const std::string& track_id, int64_t updated_ms) {
   return std::format("mf-{}_{}", track_id, updated_ms / 1000);
 }
@@ -260,14 +263,17 @@ std::vector<Node> Loader::artists(const std::vector<std::string>& ids, const std
       "  (SELECT COUNT(DISTINCT p.entity_id) FROM participant p JOIN album al ON al.id = p.entity_id "
       "   WHERE p.entity_type = 'album' AND p.role = 'albumartist' AND p.artist_id = ar.id "
       "     AND " + visible_album_sql(show_virtual_) + "), "
-      "  an.starred_at, an.rating "
+      "  an.starred_at, an.rating, ai.updated_at "
       "FROM json_each(?1) j JOIN artist ar ON ar.id = j.value "
       "LEFT JOIN annotation an ON an.user_id = ?2 AND an.item_type = 'artist' AND an.item_id = ar.id "
+      "LEFT JOIN artist_image ai ON ai.artist_id = ar.id "
       "ORDER BY j.key");
   st.bind_all(json_ids(ids), user_id_);
   while (st.step()) {
     Node n(elem);
     n.set("id", st.text(0)).set("name", st.text(1)).set("albumCount", st.int64(4));
+    // Only artists that were given a picture (PUT /ext/artists/{id}/image) have one.
+    if (!st.is_null(7)) n.set("coverArt", artist_cover_id(st.text(0), st.int64(7)));
     if (!st.is_null(5)) n.set("starred", iso_time(st.int64(5)));
     if (!st.is_null(6) && st.int64(6) > 0) n.set("userRating", st.int64(6));
     n.set("musicBrainzId", st.opt_text(3).value_or(""));

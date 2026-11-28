@@ -74,7 +74,7 @@ void add_read_routes(ExtRouter& r) {
                {"serverVersion", EOS_VERSION},
                {"features",
                 {"folders", "titles", "compositions", "relations", "virtualAlbums", "suggestions", "search",
-                 "overrides", "apiKeys", "export", "graph", "similarity", "songDetail"}}});
+                 "overrides", "apiKeys", "export", "graph", "similarity", "songDetail", "artistImages"}}});
   });
 
   r.add("GET", "/ext/scan", [](ExtCtx& c) {

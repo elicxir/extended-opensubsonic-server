@@ -88,6 +88,7 @@ struct Album {
 
 struct Artist {
   std::string id, name;
+  std::string cover_art;  // empty when the artist has no picture
   int album_count = 0;
   std::optional<std::string> starred;
   std::optional<int> user_rating;

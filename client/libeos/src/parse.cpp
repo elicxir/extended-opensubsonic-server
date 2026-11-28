@@ -113,6 +113,7 @@ Artist artist(const json& j) {
   Artist a;
   a.id = get<std::string>(j, "id");
   a.name = get<std::string>(j, "name");
+  a.cover_art = get<std::string>(j, "coverArt");
   a.album_count = get<int>(j, "albumCount");
   a.starred = opt<std::string>(j, "starred");
   a.user_rating = opt<int>(j, "userRating");
