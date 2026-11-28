@@ -47,16 +47,24 @@ std::pair<std::string, std::string> split_node(const std::string& node) {
   return {node.substr(0, p), node.substr(p + 1)};
 }
 
-json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int score_col) {
+// `score_col` and `rule_col` are the suggestion's score and rule (NULL when none).
+json prov_fields(int64_t source, const std::optional<std::string>& method, const db::Statement& st, int score_col,
+                 int rule_col) {
   json j = {{"provenance", provenance(source, method)}};
   if (source == 1 && !st.is_null(score_col)) j["confidence"] = st.real(score_col);
+  if (source == 1 && !st.is_null(rule_col)) j["rule"] = st.text(rule_col);
   return j;
 }
 
+// ?rules=: estimated links (source 1) are kept only when the suggestion that made them
+// came from one of these rules. Tag, manual and computed links are always kept.
+using Rules = std::optional<std::set<std::string>>;
+
 class Graph {
  public:
-  Graph(ExtCtx& c, Include inc, std::set<std::string> roles, Similar sim)
-      : c_(c), db_(c.db), inc_(inc), roles_(std::move(roles)), sim_(std::move(sim)), min_(c.min_source()) {}
+  Graph(ExtCtx& c, Include inc, std::set<std::string> roles, Similar sim, Rules rules)
+      : c_(c), db_(c.db), inc_(inc), roles_(std::move(roles)), sim_(std::move(sim)), rules_(std::move(rules)),
+        min_(c.min_source()) {}
 
   // Every edge touching `node` (cached). Strong kinds first, so that they win the
   // node budget.
@@ -88,6 +96,11 @@ class Graph {
 
  private:
   void add(std::vector<Edge>& out, std::string key, std::string from, std::string to, json j, bool seed_only = false) {
+    if (rules_) {
+      const auto prov = j.value("provenance", std::string());
+      const bool estimated = prov != "tag" && prov != "manual" && prov != "computed";
+      if (estimated && !rules_->count(j.value("rule", std::string()))) return;
+    }
     json e = {{"from", from}, {"to", to}};
     e.update(j);
     out.push_back({std::move(key), std::move(from), std::move(to), std::move(e), seed_only});
@@ -117,7 +130,7 @@ class Graph {
   // song -> composition, through the song's effective arrangement.
   void performances(std::vector<Edge>& out, const char* where, const std::string& id) {
     auto st = db_.prepare(std::string(
-        "SELECT ta.track_id, a.composition_id, a.id, a.name, a.kind, a.is_implicit, ta.source, s.method, s.score "
+        "SELECT ta.track_id, a.composition_id, a.id, a.name, a.kind, a.is_implicit, ta.source, s.method, s.score, s.rule "
         "FROM track_arrangement ta JOIN arrangement a ON a.id = ta.arrangement_id "
         "JOIN track t ON t.id = ta.track_id AND t.missing = 0 "
         "JOIN album al ON al.id = t.album_id "
@@ -134,7 +147,7 @@ class Graph {
                 {"arrangementName", st.opt_text(3) ? json(*st.opt_text(3)) : json(nullptr)},
                 {"arrangementKind", st.text(4)},
                 {"isOriginal", st.int64(5) != 0}};
-      j.update(prov_fields(st.int64(6), st.opt_text(7), st, 8));
+      j.update(prov_fields(st.int64(6), st.opt_text(7), st, 8, 9));
       add(out, "performance|" + from + "|" + to, from, to, std::move(j));
     }
   }
@@ -151,7 +164,7 @@ class Graph {
     };
     auto st = db_.prepare(
         "SELECT r.id, r.from_type, r.from_id, r.to_type, r.to_id, r.type, r.subtype, r.position, r.note, "
-        "r.source, s.method, s.score FROM relation r LEFT JOIN suggestion s ON s.id = r.suggestion_id "
+        "r.source, s.method, s.score, s.rule FROM relation r LEFT JOIN suggestion s ON s.id = r.suggestion_id "
         "WHERE r.source >= ?3 AND ((r.from_type = ?1 AND r.from_id = ?2) OR (r.to_type = ?1 AND r.to_id = ?2)) "
         "AND " + side("from") + " AND " + side("to") + " ORDER BY r.type, COALESCE(r.position, 0), r.id");
     st.bind_all(type, id, min_);
@@ -163,7 +176,7 @@ class Graph {
                 {"subtype", st.opt_text(6) ? json(*st.opt_text(6)) : json(nullptr)},
                 {"position", st.opt_int64(7) ? json(*st.opt_int64(7)) : json(nullptr)},
                 {"note", st.opt_text(8) ? json(*st.opt_text(8)) : json(nullptr)}};
-      j.update(prov_fields(st.int64(9), st.opt_text(10), st, 11));
+      j.update(prov_fields(st.int64(9), st.opt_text(10), st, 11, 12));
       add(out, "relation|" + st.text(0), from, to, std::move(j));
     }
   }
@@ -171,7 +184,7 @@ class Graph {
   // song -> title (work). Manual exclusions applied; the strongest row gives the provenance.
   void titles(std::vector<Edge>& out, const char* where, const std::string& id) {
     auto st = db_.prepare(std::string(
-        "SELECT tt.track_id, tt.title_id, MAX(tt.source), s.method, s.score FROM track_title tt "
+        "SELECT tt.track_id, tt.title_id, MAX(tt.source), s.method, s.score, s.rule FROM track_title tt "
         "JOIN track t ON t.id = tt.track_id AND t.missing = 0 JOIN album al ON al.id = t.album_id "
         "LEFT JOIN suggestion s ON s.id = tt.suggestion_id "
         "WHERE tt.excluded = 0 AND tt.source >= ?2 AND NOT EXISTS (SELECT 1 FROM track_title x "
@@ -182,7 +195,7 @@ class Graph {
     while (st.step()) {
       auto from = node_id("song", st.text(0)), to = node_id("title", st.text(1));
       json j = {{"type", "title"}};
-      j.update(prov_fields(st.int64(2), st.opt_text(3), st, 4));
+      j.update(prov_fields(st.int64(2), st.opt_text(3), st, 4, 5));
       add(out, "title|" + from + "|" + to, from, to, std::move(j));
     }
   }
@@ -190,7 +203,7 @@ class Graph {
   // song / composition -> artist, one edge per role.
   void credits(std::vector<Edge>& out, const char* where, const std::string& id) {
     auto st = db_.prepare(std::string(
-        "SELECT p.entity_type, p.entity_id, p.artist_id, p.role, p.sub_role, p.source, s.method, s.score "
+        "SELECT p.entity_type, p.entity_id, p.artist_id, p.role, p.sub_role, p.source, s.method, s.score, s.rule "
         "FROM participant p LEFT JOIN suggestion s ON s.id = p.suggestion_id "
         "WHERE p.entity_type IN ('track', 'composition') AND p.source >= ?2 AND p.source = ("
         "  SELECT MAX(source) FROM participant q WHERE q.entity_type = p.entity_type "
@@ -205,7 +218,7 @@ class Graph {
       auto from = node_id(st.text(0), st.text(1)), to = node_id("artist", st.text(2));
       auto sub = st.text(4);
       json j = {{"type", "credit"}, {"role", role}, {"subRole", sub.empty() ? json(nullptr) : json(sub)}};
-      j.update(prov_fields(st.int64(5), st.opt_text(6), st, 7));
+      j.update(prov_fields(st.int64(5), st.opt_text(6), st, 7, 8));
       add(out, "credit|" + from + "|" + to + "|" + role + "|" + sub, from, to, std::move(j));
     }
   }
@@ -223,7 +236,7 @@ class Graph {
       }
     }
     auto st = db_.prepare(std::string(
-        "SELECT at.track_id, at.album_id, MAX(at.source), s.method, s.score FROM album_track at "
+        "SELECT at.track_id, at.album_id, MAX(at.source), s.method, s.score, s.rule FROM album_track at "
         "JOIN track t ON t.id = at.track_id AND t.missing = 0 "
         "JOIN album al ON al.id = at.album_id AND al.missing = 0 "
         "LEFT JOIN suggestion s ON s.id = at.suggestion_id "
@@ -235,7 +248,7 @@ class Graph {
     while (st.step()) {
       auto from = node_id("song", st.text(0)), to = node_id("album", st.text(1));
       json j = {{"type", "album"}, {"virtual", true}};
-      j.update(prov_fields(st.int64(2), st.opt_text(3), st, 4));
+      j.update(prov_fields(st.int64(2), st.opt_text(3), st, 4, 5));
       add(out, "album|" + from + "|" + to, from, to, std::move(j));
     }
   }
@@ -245,6 +258,7 @@ class Graph {
   Include inc_;
   std::set<std::string> roles_;
   Similar sim_;
+  Rules rules_;
   int min_;
   std::unordered_map<std::string, std::vector<Edge>> cache_;
 };
@@ -315,6 +329,15 @@ Similar parse_similar(ExtCtx& c, bool wanted) {
   return s;
 }
 
+Rules parse_rules(ExtCtx& c) {
+  auto v = c.query("rules");
+  if (!v) return std::nullopt;
+  std::set<std::string> out;
+  for (const auto& r : split_any(*v, {","}))
+    if (auto t = trim(r); !t.empty()) out.insert(t);
+  return out;
+}
+
 const std::string& other_end(const Edge& e, const std::string& node) { return e.from == node ? e.to : e.from; }
 
 Reply graph(ExtCtx& c) {
@@ -325,7 +348,7 @@ Reply graph(ExtCtx& c) {
   std::set<std::string> roles;
   for (const auto& r : split_any(c.query("roles").value_or(""), {","})) roles.insert(trim(r));
   const auto inc = parse_include(c);
-  Graph g(c, inc, std::move(roles), parse_similar(c, inc.similar));
+  Graph g(c, inc, std::move(roles), parse_similar(c, inc.similar), parse_rules(c));
 
   // Breadth first from the seed, so that when the node budget runs out the nearest
   // nodes are the ones kept. A node other than the seed with more than `fanout`

@@ -955,3 +955,28 @@ TEST_F(ExtTest, EmptiedCompositionStaysWhenSomethingPointsAtIt) {
   ASSERT_EQ(a.accept(mb), 200);
   EXPECT_EQ(s->get("/ext/compositions/" + by_title).status, 200);
 }
+
+TEST_F(ExtTest, GraphKeepsOnlyTheRulesAskedFor) {
+  Approvals a{*s};
+  ASSERT_EQ(a.accept(a.title_match()), 200);
+  const auto seed = "/ext/graph?seed=song:" + a.f1 + "&include=composition";
+  auto performances = [&](const std::string& extra) {
+    auto r = s->get(seed + extra);
+    EXPECT_EQ(r.status, 200) << r.body.dump();
+    std::vector<json> out;
+    for (const auto& e : r.body["edges"])
+      if (e["type"] == "performance") out.push_back(e);
+    return out;
+  };
+  // Unfiltered, the estimated edge says which rule made it.
+  auto all = performances("");
+  ASSERT_EQ(all.size(), 2u);
+  EXPECT_EQ(all[0]["rule"], "same_composition");
+  // Only MusicBrainz: the title match goes, and with it the other song.
+  EXPECT_TRUE(performances("&rules=mb_match").empty());
+  EXPECT_TRUE(performances("&rules=").empty());  // empty: no estimates at all
+  ASSERT_EQ(a.accept(a.mb_link()), 200);
+  auto mb = performances("&rules=mb_match,musicbrainz_work");
+  ASSERT_EQ(mb.size(), 2u);
+  EXPECT_EQ(mb[0]["rule"], "mb_match");
+}

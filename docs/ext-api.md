@@ -105,6 +105,7 @@
 | `limit` | 節の上限（1〜1000）。中心に近い節から残します | 200 |
 | `fanout` | 中心以外の節は、相手がこの数より多いと開きません（1〜1000） | 50 |
 | `includeEstimated` | `false` で推定の紐付けを除きます | `true` |
+| `rules` | 推定の紐付けを、それを作った候補の規則（`rule`）で絞ります（`,` 区切り。例：`musicbrainz_work,musicbrainz_arrangement`）。タグと手動の紐付けは常に残ります。空にすると推定を全部除きます | 絞らない |
 | `similarKind` | `similar` の辺に使う類似度の種類（`GET /ext/similarity`）。保存されていない種類は 400 です | `audio_embed` |
 | `similarK` | `similar` の辺を、1 曲あたり点数の高い順に何本まで出すか（1〜50） | 5 |
 | `similarMinScore` | これより点数の低い `similar` の辺は出しません | なし |
@@ -151,7 +152,7 @@
 | `album` | 曲 → アルバム | `virtual`（仮想アルバムなら `true`） |
 | `similar` | 曲 — 曲（向きなし。`from` は相手を選んだ側） | `kind`、`score`（尺度は種類ごと）。`provenance` は `computed` |
 
-- どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` も付きます。
+- どの辺も `provenance` を持ちます。推定（`rule`・`llm`）には `confidence` と、それを作った候補の規則 `rule`（`musicbrainz_work`・`same_composition` など）も付きます。
 - 辺は、応答に入った節どうしのものを全部返します（端の節どうしの辺も含みます）。
 - `truncated`：`limit` に達して、たどるのをやめたときに `true`。
 - 人物やアルバムは相手が数百になるので、`include` に書いたときだけたどります。書いても、`fanout` を超える節は開かずに `degree` だけ返します。

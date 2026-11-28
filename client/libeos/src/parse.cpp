@@ -270,6 +270,7 @@ Graph graph(const json& j) {
     edge.directed = get<bool>(e, "directed");
     edge.provenance = get<std::string>(e, "provenance");
     edge.confidence = opt<double>(e, "confidence");
+    edge.rule = opt<std::string>(e, "rule");
     edge.arrangement_id = opt<std::string>(e, "arrangementId");
     edge.arrangement_name = opt<std::string>(e, "arrangementName");
     edge.arrangement_kind = opt<std::string>(e, "arrangementKind");

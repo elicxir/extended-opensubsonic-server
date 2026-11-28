@@ -322,6 +322,7 @@ struct GraphEdge {
   bool directed = false;  // relations only: from -> to means something
   std::string provenance;
   std::optional<double> confidence;  // estimated links only
+  std::optional<std::string> rule;   // estimated links: the suggestion's rule, e.g. musicbrainz_work
   // performance
   std::optional<std::string> arrangement_id, arrangement_name, arrangement_kind;
   bool is_original = false;
