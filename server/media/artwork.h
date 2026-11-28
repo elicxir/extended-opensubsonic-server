@@ -43,5 +43,9 @@ class Artwork {
 
 // Absolute path of a track's file, checked to stay inside its library root.
 std::optional<std::filesystem::path> track_file(db::Connection& db, const std::string& track_id);
+// An image file given relative to the album's library root (a cover chosen by hand):
+// its absolute path when it is an image that exists inside the library.
+std::optional<std::filesystem::path> library_image(db::Connection& db, const std::string& album_id,
+                                                   const std::string& relative);
 
 }  // namespace eos::media

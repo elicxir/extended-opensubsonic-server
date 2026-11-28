@@ -7,6 +7,7 @@
 #include "api/ext/suggestions.h"
 #include "core/ids.h"
 #include "core/normalize.h"
+#include "media/artwork.h"
 #include "scanner/derived.h"
 #include "scanner/track_info.h"
 
@@ -516,6 +517,40 @@ void add_write_routes(ExtRouter& r) {
             });
           }
           if (b.contains("sortName")) set_override(w, "album", id, "sort_name", "album", "sort_name", b["sortName"], restore("ALBUMSORT"));
+          // A cover chosen by hand: an image inside the library, given relative to its root.
+          if (b.contains("cover")) {
+            if (b["cover"].is_null()) {
+              w.run("DELETE FROM field_override WHERE entity_type = 'album' AND entity_id = ? AND field = 'cover'", id);
+            } else {
+              if (!b["cover"].is_string()) throw bad_request("cover must be a string or null");
+              auto path = b["cover"].get<std::string>();
+              if (!media::library_image(w, id, path))
+                throw bad_request("cover: not an image inside the library: " + path);
+              w.run(
+                  "INSERT OR REPLACE INTO field_override (entity_type, entity_id, field, value, updated_at) "
+                  "VALUES ('album', ?, 'cover', ?, ?)",
+                  id, path, db::now_ms());
+            }
+          }
+          // Who a virtual album is by, the most important first.
+          if (b.contains("albumArtists")) {
+            if (w.scalar_text("SELECT kind FROM album WHERE id = ?", id) != std::optional<std::string>("virtual"))
+              throw conflict("Only virtual albums have editable album artists");
+            auto names = str_list(b, "albumArtists");
+            std::string shown;
+            for (const auto& n : names) shown += (shown.empty() ? "" : " / ") + n;
+            w.run("DELETE FROM participant WHERE entity_type = 'album' AND entity_id = ? AND role = 'albumartist'", id);
+            int64_t pos = 0;
+            for (const auto& n : names) {
+              scanner::Person p{n, "", "", ""};
+              if (!w.scalar_int("SELECT 1 FROM artist WHERE id = ?", scanner::artist_id(n))) scanner::upsert_artist(w, p);
+              w.run(
+                  "INSERT OR IGNORE INTO participant (entity_type, entity_id, artist_id, role, sub_role, position, source) "
+                  "VALUES ('album', ?, ?, 'albumartist', '', ?, ?)",
+                  id, scanner::artist_id(n), pos++, kManual);
+            }
+            w.run("UPDATE album SET display_artist = ? WHERE id = ?", shown.empty() ? std::optional<std::string>() : shown, id);
+          }
           w.run("UPDATE album SET updated_at = ? WHERE id = ?", db::now_ms(), id);
         },
         true);

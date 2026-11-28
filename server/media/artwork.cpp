@@ -71,6 +71,19 @@ std::optional<fs::path> track_file(db::Connection& db, const std::string& track_
   return file;
 }
 
+std::optional<fs::path> library_image(db::Connection& db, const std::string& album_id, const std::string& relative) {
+  auto lib = db.scalar_text("SELECT l.path FROM album al JOIN library l ON l.id = al.library_id WHERE al.id = ?", album_id);
+  if (!lib || relative.empty()) return std::nullopt;
+  std::error_code ec;
+  auto root = fs::weakly_canonical(*lib, ec);
+  auto file = fs::weakly_canonical(fs::path(*lib) / fs::path(std::u8string(relative.begin(), relative.end())), ec);
+  if (ec) return std::nullopt;
+  auto rel = file.lexically_relative(root);
+  if (rel.empty() || rel.native().starts_with("..")) return std::nullopt;  // escapes the library
+  if (!fs::is_regular_file(file, ec) || mime_for(file).empty()) return std::nullopt;
+  return file;
+}
+
 Artwork::Artwork(const Config& cfg) : cfg_(cfg), cache_dir_(cfg.cache_dir() / "artwork") {}
 
 std::optional<Image> Artwork::embedded(const fs::path& file) {
@@ -183,6 +196,14 @@ std::optional<Image> Artwork::album(db::Connection& db, const std::string& album
       "SELECT l.path, al.dir_path FROM album al JOIN library l ON l.id = al.library_id WHERE al.id = ?");
   st.bind(1, album_id);
   if (!st.step()) return std::nullopt;
+  // A cover chosen by hand (PATCH /ext/albums/{id}: cover) comes first.
+  if (auto chosen = db.scalar_text(
+          "SELECT value FROM field_override WHERE entity_type = 'album' AND entity_id = ? AND field = 'cover'", album_id)) {
+    if (auto f = library_image(db, album_id, *chosen)) {
+      if (auto data = read_file(*f))
+        return finish({mime_for(*f), std::move(*data)}, f->string() + "|" + std::to_string(mtime_of(*f)), size);
+    }
+  }
   if (!st.is_null(1)) {
     if (auto f = folder_image(fs::path(st.text(0)) / st.text(1))) {
       if (auto data = read_file(*f))
@@ -193,7 +214,15 @@ std::optional<Image> Artwork::album(db::Connection& db, const std::string& album
       "SELECT id FROM track WHERE album_id = ? AND missing = 0 AND has_embedded_art = 1 "
       "ORDER BY COALESCE(disc_number, 0), COALESCE(track_number, 0), path LIMIT 1",
       album_id);
-  if (!first) return std::nullopt;
+  if (!first) {
+    // A virtual album has no songs of its own: the cover of its first member.
+    auto member = db.scalar_text(
+        "SELECT t.id FROM album_track at JOIN track t ON t.id = at.track_id AND t.missing = 0 "
+        "WHERE at.album_id = ? AND at.excluded = 0 "
+        "ORDER BY COALESCE(at.disc_number, 0), COALESCE(at.track_number, 0), t.path LIMIT 1",
+        album_id);
+    return member ? track(db, *member, size) : std::nullopt;
+  }
   auto file = track_file(db, *first);
   if (!file) return std::nullopt;
   auto img = embedded(*file);

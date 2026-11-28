@@ -185,7 +185,7 @@
 | `DELETE /ext/folders/{id}` | | タグ由来は 409。下位フォルダも消えます |
 | `PATCH /ext/albums/{id}/folders` | `add?`、`remove?`（フォルダ ID） | |
 | `POST /ext/albums` | `name`、`sortName?`、`albumArtist?`、`tracks?`（曲 ID の配列、この順） | 仮想アルバムを作ります |
-| `PATCH`（または `PUT`）`/ext/albums/{id}` | `name?`、`sortName?` | 上書き。`null` で上書きを消してタグの値に戻します |
+| `PATCH`（または `PUT`）`/ext/albums/{id}` | `name?`、`sortName?`、`cover?`、`albumArtists?` | 上書き。`null` で上書きを消してタグの値に戻します。`cover` は、ライブラリの中の画像ファイル（ライブラリのルートからの相対パス）をそのアルバムの絵にします（ライブラリの外や画像でないものは 400、`null` で元に戻す）。`albumArtists`（名前の配列、主要な順）は仮想アルバムだけ（物理は 409）で、表示名は ` / ` でつなぎます。仮想アルバムの絵は、`cover` がなければ先頭の曲の絵です |
 | `DELETE /ext/albums/{id}` | | 手作業の仮想アルバムだけ。物理アルバムとタグ由来の仮想アルバムは 409 |
 | `PATCH /ext/albums/{id}/tracks` | `add?`（曲 ID か `{"id", "disc", "track"}`）、`remove?` | 仮想アルバムだけ（物理は 409） |
 | `PATCH /ext/songs/{id}` | `title?`、`sortTitle?`、`subtitle?` | 上書き。`null` でタグの値に戻します。検索にもすぐ反映されます |

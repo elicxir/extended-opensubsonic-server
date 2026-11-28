@@ -1,4 +1,5 @@
 // M4: the /ext API, end to end through ExtRouter (no network).
+#include <fstream>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1028,4 +1029,35 @@ TEST_F(ExtTest, AcceptingATitleMatchKeepsNamesAsWritten) {
   EXPECT_NE(*before, "kato");
   ASSERT_EQ(a.accept(a.title_match()), 200);
   EXPECT_EQ(s->conn->scalar_text("SELECT name FROM artist WHERE name_norm = 'kato'"), before);
+}
+
+TEST_F(ExtTest, VirtualAlbumCoverAndArtists) {
+  auto f1 = s->track("Other/01.flac"), f2 = s->track("Other/02.flac");
+  auto va = s->call("POST", "/ext/albums", json{{"name", "Field Game"}, {"tracks", {f1, f2}}});
+  ASSERT_EQ(va.status, 201);
+  const std::string path = "/ext/albums/" + va.body["id"].get<std::string>();
+  const std::string id = va.body["id"];
+
+  // A cover must be an image inside the library.
+  fs::create_directories(music / "covers");
+  std::ofstream(music / "covers/field.png", std::ios::binary) << test::make_png(8, 8);
+  std::ofstream(music / "covers/notes.txt") << "not an image";
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "covers/missing.png"}}).status, 400);
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "covers/notes.txt"}}).status, 400);
+  EXPECT_EQ(s->call("PATCH", path, json{{"cover", "../outside.png"}}).status, 400);
+  ASSERT_EQ(s->call("PATCH", path, json{{"cover", "covers/field.png"}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_text(
+                "SELECT value FROM field_override WHERE entity_type = 'album' AND entity_id = ? AND field = 'cover'", id),
+            "covers/field.png");
+  ASSERT_EQ(s->call("PATCH", path, json{{"cover", nullptr}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_int("SELECT COUNT(*) FROM field_override WHERE entity_id = ?", id), 0);
+
+  // Album artists, the most important first; physical albums keep what their tags say.
+  ASSERT_EQ(s->call("PATCH", path, json{{"albumArtists", {"Kato", "Sato"}}}).status, 200);
+  EXPECT_EQ(s->conn->scalar_text("SELECT display_artist FROM album WHERE id = ?", id), "Kato / Sato");
+  EXPECT_EQ(s->conn->scalar_int(
+                "SELECT COUNT(*) FROM participant WHERE entity_type = 'album' AND entity_id = ? AND role = 'albumartist'", id),
+            2);
+  auto physical = s->conn->scalar_text("SELECT album_id FROM track WHERE id = ?", f1);
+  EXPECT_EQ(s->call("PATCH", "/ext/albums/" + *physical, json{{"albumArtists", {"Kato"}}}).status, 409);
 }
